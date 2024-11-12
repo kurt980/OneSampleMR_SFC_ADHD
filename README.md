@@ -22,7 +22,7 @@ Demographic data contains values for sex, race, ethnicity and age.
 The code is divided into 3 main directories: association analysis, gwas and mr analysis
 
 - **/gwas_scripts** contains R scripts for running GWAS with different settings and parameters.
-- **/** contains R scripts for conducting MR study: 
+- **/mr_scripts** contains R scripts for conducting MR study: 
   - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include both the main analysis, the reverse MR analysis, the case/control analysis and sensitivity analysis
   - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for main analysis, reverse MR, and sensitivity analysis
   - **2sri**: 2sri script is for running the 2-stage residual inclusion estimation to conduct one-sample MR analysis for binary outcome (ADHD diagnosis); this include the process for the case/control MR study
