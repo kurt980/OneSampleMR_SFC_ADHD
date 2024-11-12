@@ -33,7 +33,7 @@ The code is divided into 3 main directories: association analysis, gwas and mr a
   <br>
   <br>
 - **/mr_scripts_other** contains R scripts for conducting other MR studies
-  - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include the case/control analysis and sensitivity analysis
+  - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include the case/control analysis and sensitivity analysis; (note that the C+T for case/control is identical as the main analysis because the exposure does not change, but only the outcome changes)
   - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for sensitivity analysis
   - **2sri**: 2sri script is for running the 2-stage residual inclusion estimation to conduct one-sample MR analysis for binary outcome (ADHD diagnosis); this include the process for the case/control MR study
   <br>
