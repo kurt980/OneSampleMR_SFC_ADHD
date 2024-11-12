@@ -1,0 +1,281 @@
+#
+
+# Running GWAS 
+
+# 3. Script for running GWAS for ADHD scores (for main Reverse MR)
+
+###############################################################################################
+## Readme: this code runs and saves GWAS for main reverse MR analysis, using PLINK
+###############################################################################################
+
+
+library(snpStats)
+library(tibble)
+library(dplyr)
+library(foreach)
+library(doParallel)
+
+dsm5s <- c("depress", "anxdisord", "somaticpr", "adhd", "opposit", "conduct")
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_bfile/bfile_for_gwas_comparison/"
+cov_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Covariates/cov_for_gwas_comparison/"
+harm_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Harmonized_scfc/"
+pheno_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Phenotype/"
+tool_path <- "/Users/grc8mu/Desktop/DS/Tools/"
+
+directory <- "/Users/grc8mu/Desktop/DS/1023_GWAS_DSM5/"
+
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+new_fam <- read.table(paste0(utilities_path, "acspsw03.txt"), header = T)
+new_fam <- new_fam %>%
+  select(rel_family_id, subjectkey, eventname, race_ethnicity)
+
+CFDRs <- demo_cbcl_base_scfc %>%
+  select(subjectkey, site_id_l, eventname, interview_age, sex, race, ethn) %>%
+  mutate(
+    subjectkey = sub("^(.{4})", "\\1_", subjectkey)  # Add '_' after the 4th character
+    #ethn = as.factor(ethn),  # Convert ethnicity to a factor
+    #race = as.factor(race)   # Convert race to a factor if needed
+  ) %>%
+  inner_join(new_fam, by = c("subjectkey", "eventname")) %>%
+  select(rel_family_id, subjectkey, site_id_l, interview_age, sex, race, ethn, race_ethnicity) %>%
+  rename(fid = rel_family_id, iid = subjectkey) %>%
+  mutate(  # Add underscore to subjectkey
+    race = gsub(" ", "_", race),                      # Replace spaces in 'race'
+    ethn = gsub(" ", "_", ethn)                       # Replace spaces in 'ethnicity'
+  )
+
+
+## Create new phenotypes for ADHD
+qc <- "_qc" # 
+QCs <- c("_qc") # qc and no qc
+unrel <- "" # 
+unrels <- c("", "_unrelated") # all obs and unrelated obs
+# for reference: gwas_methods <- c("gwasplink19", "gwasplink20_nocov", "gwasplink20_cov", "fastGWA_nocov", "fastGWA_cov")
+
+for (qc in QCs) {
+  for (unrel in unrels) {
+    #-----------get bfile---------------------------------------------------------
+    bfile <- paste0(bfile_path, "scfc_all", qc, unrel)
+    #-------------get grm matrix(for fastGWA)-----------------------------------
+    bgrm <- paste0(bfile_path, "scfc_all", qc, unrel, "_out")
+    bspr <- paste0(bfile_path, "scfc_all", qc, unrel, "_sp_out")
+    
+    ##########For both all and unrelated obs, 4 methods for each combination##
+    
+    ########1. GWAS with PLINK2.0, with sex and age covariate (--glm)#########
+    method <- "dsm5_gwasplink20_covsex"
+    #+++++++++Get covariates++++++++++++++++++++++++++++++++++++++++++++++++
+    covar_sex <- paste0(cov_path, "covar_sex.txt")
+    #+++++++++Set work directory++++++++++++++++++++++++++++++++++++++++++++++
+    work_dir <- paste0(directory, method, qc, unrel, "/")
+    if (!dir.exists(work_dir)) { dir.create(work_dir, recursive = F) }
+    #+++++++++Create readme+++++++++++++++++++++++++++++++++++++++++++++++++++
+    readme_path <- paste0(work_dir, "readme.txt")
+    readme_conn <- file(readme_path, "w")
+    writeLines(paste0("Commands run for GWAS analysis:", method, qc, unrel), readme_conn)
+    start_time <- Sys.time()
+    #---------Run GWAS commands for dsm5s--------------------------------------
+    cat(paste0("\n***************Running GWAS: ", method, qc, unrel, "***************\n\n"))
+    # Set up parallel backend
+    num_cores <- detectCores() - 1
+    cl <- makeCluster(num_cores)
+    registerDoParallel(cl)
+    foreach(dsm5 = dsm5s, .combine = list) %dopar% {
+      tryCatch({
+        #+++++++++get SCFC dsm5 phenotypes+++++++++++++++++++++++++++++++++++++++
+        dsm5_pheno <- paste0(pheno_path, "dsm5_", dsm5, ".phen")
+        #+++++++++Name output file name+++++++++++++++++++++++++++++++++++++++++
+        outfile <- paste0(work_dir, method, qc, unrel, "_dsm5_", dsm5)
+        #+++++++++Run GWAS commands+++++++++++++++++++++++++++++++++++++++++++++
+        command <- paste0(tool_path, "plink2 --bfile ", bfile, " ",
+                          "--pheno ", dsm5_pheno, " ",
+                          "--covar ", covar_sex, " ",
+                          "--glm no-x-sex hide-covar ",  # Added hide-covar to avoid covariate effect lines in the output
+                          "--covar-variance-standardize ",
+                          "--out ", outfile)
+        system(command)
+        cat(method, qc, unrel, " executed successfully for:", "dsm5_", dsm5, "\n")
+        writeLines(command, readme_conn, useBytes = TRUE)}, error = function(e) {
+          return(paste("Error:", e$message))
+        })
+    }
+    end_time <- Sys.time()
+    writeLines(sprintf("Total time to run all commands: %s minutes", difftime(end_time, start_time, units = "mins")), readme_conn)
+    close(readme_conn)
+    stopCluster(cl)
+    
+    #---------Save GWAS results-----------------------------------------------
+    #+++++++++Set save directory++++++++++++++++++++++++++++++++++++++++++++++
+    save_dir <- paste0(work_dir, "gwas_results_csv/")
+    if (!dir.exists(save_dir)) { dir.create(save_dir, recursive = F) }
+    #+++++++++Create readme+++++++++++++++++++++++++++++++++++++++++++++++++++
+    readme_path <- paste0(save_dir, "readme.txt")
+    readme_conn <- file(readme_path, "w")
+    writeLines(paste0("GWAS using ", method, qc, unrel, "\n\n"), readme_conn)
+    command <- paste0(tool_path, "plink2 --bfile ", bfile, " ",
+                      "--pheno ", paste0(pheno_path, "dsm5_", "adhd", ".phen"), " ",
+                      "--covar ", covar_sex, " ",
+                      "--glm no-x-sex hide-covar ",  # Added hide-covar to avoid covariate effect lines in the output
+                      "--covar-variance-standardize ",
+                      "--out ", paste0(work_dir, method, qc, unrel, "_dsm5_", "adhd"))
+    writeLines(paste0("Commands run: ", command, "\n\n"), readme_conn)
+    start_time <- Sys.time()
+    missing <- 0
+    #+++++++++Create SNP counts+++++++++++++++++++++++++++++++++++++++++++++++
+    count_path <- paste0(save_dir, "SNP_counts.txt")
+    count_conn <- file(count_path, "w")
+    writeLines(paste0("SNPs P<5e-08 for GWAS using ", method, qc, unrel, "\n\n"), count_conn)
+    #---------Read results for dsm5s-------------------------------------------
+    cat(paste0("\n^^^^^^^^^^^^Reading GWAS results: ", method, qc, unrel, "^^^^^^^^^^^^\n"))
+    num_cores <- detectCores() - 1
+    cl <- makeCluster(num_cores)
+    registerDoParallel(cl)
+    # parallel read gwas results
+    parallel_results <- foreach(dsm5 = dsm5s, .packages = c("dplyr")) %dopar% {
+      library(dplyr)
+      tryCatch({
+        gwas_result_path <- paste0(work_dir, method, qc, unrel, "_dsm5_", dsm5,  ".PHENO1.glm.linear")
+        if (file.exists(gwas_result_path)) {
+          gwas_result <- read.table(gwas_result_path, header = F, sep = "\t")
+          colnames(gwas_result) <- c("#CHROM", "POS", "SNP", "REF", "ALT", "PROVISIONAL_REF?", "A1", "OMITTED", "A1_FREQ", "TEST", "OBS_CT", "BETA", "SE", "T_STAT", "P", "ERRCODE")
+          write.csv(gwas_result, paste0(save_dir, method, qc, unrel, "_dsm5_", dsm5,  ".csv"), row.names = FALSE, quote = FALSE)
+          sig_snp_count <- nrow(gwas_result %>% filter(P < 5e-08))
+          return(list(dsm5 = dsm5, missing = FALSE, snp_count = sig_snp_count))
+        } else {
+          return(list(dsm5 = dsm5, missing = TRUE, snp_count = NA))
+        }}, error = function(e) {
+          return(list(dsm5 = dsm5, error = paste("Error:", e$message), missing = TRUE, snp_count = NA))
+        })
+    }
+    stopCluster(cl)
+    cat(paste0("^^^^^^^^^^^^Finished Reading GWAS results: ", method, qc, unrel, "^^^^^^^^^^^^\n\n"))
+    
+    for (res in parallel_results) {
+      if (res$missing) {
+        writeLines(paste0("Missing file for dsm5 ", res$dsm5, ": ", paste0(work_dir, method, qc, unrel, "_dsm5_", res$dsm5, ".PHENO1.glm.linear")), readme_conn)
+        cat("No GWAS results: ", paste0(work_dir, method, qc, unrel, "_dsm5_", dsm5, ".PHENO1.glm.linear"), "\n")
+      } else {
+        writeLines(paste0("\n\nSignificant SNPs count for dsm5 ", res$dsm5, ": ", res$snp_count, " for GWAS using ", method, qc, unrel), count_conn)
+      }
+    }
+    end_time <- Sys.time()
+    total_duration <- difftime(end_time, start_time, units = "mins")
+    writeLines(sprintf("Total time to process all files: %s minutes", total_duration), readme_conn)
+    writeLines(paste("Total missing files:", missing), readme_conn)
+    close(readme_conn)
+    close(count_conn)
+    cat(paste0("***************Finished running commands:", method, qc, unrel, "***************\n\n\n"))
+    #=========================================================================
+    
+    ##########2. GWAS with fastGWA, with sex covariate########################
+    method <- "dsm5_fastGWA_covsex"
+    #+++++++++Get covariates++++++++++++++++++++++++++++++++++++++++++++++++
+    covar_sex <- paste0(cov_path, "covar_sex.txt")
+    #+++++++++Set work directory++++++++++++++++++++++++++++++++++++++++++++++
+    work_dir <- paste0(directory, method, qc, unrel, "/")
+    if (!dir.exists(work_dir)) { dir.create(work_dir, recursive = F) }
+    #+++++++++Create readme+++++++++++++++++++++++++++++++++++++++++++++++++++
+    readme_path <- paste0(work_dir, "readme.txt")
+    readme_conn <- file(readme_path, "w")
+    writeLines(paste0("Commands run for GWAS analysis:", method, qc, unrel), readme_conn)
+    start_time <- Sys.time()
+    #---------Run GWAS commands for dsm5s--------------------------------------
+    cat(paste0("\n***************Running GWAS: ", method, qc, unrel, "***************\n\n"))
+    num_cores <- detectCores() - 1
+    cl <- makeCluster(num_cores)
+    registerDoParallel(cl)
+    foreach(dsm5 = dsm5s, .combine = list) %dopar% {
+      tryCatch({
+        #+++++++++get SCFC dsm5 phenotypes+++++++++++++++++++++++++++++++++++++++
+        dsm5_pheno <- paste0(pheno_path, "dsm5_", dsm5, ".phen")
+        #+++++++++Name output file name+++++++++++++++++++++++++++++++++++++++++
+        outfile <- paste0(work_dir, method, qc, unrel, "_dsm5_", dsm5)
+        #+++++++++Run GWAS commands+++++++++++++++++++++++++++++++++++++++++++++
+        command <- paste0(tool_path, "gcta64 --bfile ", bfile, " ",
+                          "--pheno ", dsm5_pheno, " ",
+                          "--grm-sparse ", bspr, " ",
+                          "--fastGWA-mlm ",
+                          "--covar ", covar_sex, " ",
+                          "--thread-num 16 ", "--out ", outfile)
+        system(command)
+        cat(method, qc, unrel, " executed successfully for:", "dsm5_", dsm5, "\n")
+        writeLines(command, readme_conn, useBytes = TRUE)
+      }, error = function(e) {
+        return(paste("Error", e$message))
+      })
+    }
+    end_time <- Sys.time()
+    writeLines(sprintf("Total time to run all commands: %s minutes", difftime(end_time, start_time, units = "mins")), readme_conn)
+    close(readme_conn)
+    stopCluster(cl)
+    
+    #---------Save GWAS results-----------------------------------------------
+    #+++++++++Set save directory++++++++++++++++++++++++++++++++++++++++++++++
+    save_dir <- paste0(work_dir, "gwas_results_csv/")
+    if (!dir.exists(save_dir)) { dir.create(save_dir, recursive = F) }
+    #+++++++++Create readme+++++++++++++++++++++++++++++++++++++++++++++++++++
+    readme_path <- paste0(save_dir, "readme.txt")
+    readme_conn <- file(readme_path, "w")
+    writeLines(paste0("GWAS using ", method, qc, unrel, "\n\n"), readme_conn)
+    # repeat command because using parallel computing now
+    command <- paste0(tool_path, "gcta64 --bfile ", bfile, " ",
+                      "--pheno ", paste0(pheno_path, "dsm5_", "adhd", ".phen"), " ",
+                      "--grm-sparse ", bspr, " ",
+                      "--fastGWA-mlm ",
+                      "--covar ", covar_sex, " ",
+                      "--thread-num 16 ", "--out ", paste0(work_dir, method, qc, unrel, "_dsm5_", "adhd"))
+    writeLines(paste0("Commands run: ", command, "\n\n"), readme_conn)
+    start_time <- Sys.time()
+    missing <- 0
+    #+++++++++Create SNP counts+++++++++++++++++++++++++++++++++++++++++++++++
+    count_path <- paste0(save_dir, "SNP_counts.txt")
+    count_conn <- file(count_path, "w")
+    writeLines(paste0("SNPs P<5e-08 for GWAS using ", method, qc, unrel, "\n\n"), count_conn)
+    #---------Read results for dsm5s-------------------------------------------
+    cat(paste0("\n^^^^^^^^^^^^Reading GWAS results: ", method, qc, unrel, "^^^^^^^^^^^^\n"))
+    num_cores <- detectCores() - 1
+    cl <- makeCluster(num_cores)
+    registerDoParallel(cl)
+    # parallel read gwas results
+    parallel_results <- foreach(dsm5 = dsm5s, .packages = c("dplyr")) %dopar% {
+      library(dplyr)
+      tryCatch({
+        gwas_result_path <- paste0(work_dir, method, qc, unrel, "_dsm5_", dsm5,  ".fastGWA")
+        if (file.exists(gwas_result_path)) {
+          gwas_result <- read.table(gwas_result_path, header = TRUE, sep = "")
+          write.csv(gwas_result, paste0(save_dir, method, qc, unrel, "_dsm5_", dsm5,  ".csv"), row.names = FALSE, quote = FALSE)
+          sig_snp_count <- nrow(gwas_result %>% filter(P < 5e-08))
+          return(list(dsm5 = dsm5, missing = FALSE, snp_count = sig_snp_count))
+        } else {
+          return(list(dsm5 = dsm5, missing = TRUE, snp_count = NA))
+        }
+      }, error = function(e) {
+        return(list(dsm5 = dsm5, error = paste("Error:", e$message), missing = TRUE, snp_count = NA))
+      })
+    }
+    
+    stopCluster(cl)
+    cat(paste0("^^^^^^^^^^^^Finished Reading GWAS results: ", method, qc, unrel, "^^^^^^^^^^^^\n\n"))
+    
+    for (res in parallel_results) {
+      if (res$missing) {
+        writeLines(paste0("Missing file for dsm5 ", res$dsm5, ": ", paste0(work_dir, method, qc, unrel, "_dsm5_", res$dsm5, ".fastGWA")), readme_conn)
+        cat("No GWAS results: ", paste0(work_dir, method, qc, unrel, "_dsm5_", res$dsm5, ".fastGWA"), "\n")
+      } else {
+        writeLines(paste0("\n\nSignificant SNPs count for dsm5 ", res$dsm5, ": ", res$snp_count, " for GWAS using ", method, qc, unrel), count_conn)
+      }
+    }
+    end_time <- Sys.time()
+    total_duration <- difftime(end_time, start_time, units = "mins")
+    writeLines(sprintf("Total time to process all files: %s minutes", total_duration), readme_conn)
+    writeLines(paste("Total missing files:", missing), readme_conn)
+    close(readme_conn)
+    close(count_conn)
+    cat(paste0("***************Finished running commands:", method, qc, unrel, "***************\n\n\n"))
+    #=========================================================================
+  }
+}
