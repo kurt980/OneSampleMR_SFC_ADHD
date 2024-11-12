@@ -23,7 +23,7 @@ The code is divided into 3 main directories: association analysis, gwas and mr a
 
 - **/gwas_scripts** contains R scripts for running GWAS with different settings and parameters.
   - software included in the scripts are **PLINK1.9**(for initial main analysis), **PLINK2.0**(for GWAS with covariates), **GCTA**(for fastGWA, not included in the final study)
-  - settings and parameters include //
+  - settings and parameters include \\
 - **/mr_scripts** contains R scripts for conducting MR study: 
   - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include both the main analysis, the reverse MR analysis, the case/control analysis and sensitivity analysis
     - the clumping is done using **PLINK1.9**
