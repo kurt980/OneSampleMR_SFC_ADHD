@@ -23,14 +23,14 @@ The code is divided into 3 main directories: association analysis, gwas and mr a
 
 - **/gwas_scripts** contains R scripts for running GWAS with different settings and parameters.
   - software included in the scripts are **PLINK1.9**(for initial main analysis), **PLINK2.0**(for GWAS with covariates), **GCTA**(for fastGWA, not included in the final study)
-  - gwas scripts contain code for running GWAS on combinations of parameters: QCed/non-QCed data, and on all samples/unrelated samples
-- **/mr_scripts** contains R scripts for conducting MR study: 
+  - gwas scripts contain code for running GWAS on combinations of parameters: QCed/non-QCed data, and on all samples/unrelated samples\
+- **/mr_scripts** contains R scripts for conducting MR study: \
   - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include both the main analysis, the reverse MR analysis, the case/control analysis and sensitivity analysis
-    - the clumping is done using **PLINK1.9**
+    - the clumping is done using **PLINK1.9**\
   - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for main analysis, reverse MR, and sensitivity analysis
   - **2sri**: 2sri script is for running the 2-stage residual inclusion estimation to conduct one-sample MR analysis for binary outcome (ADHD diagnosis); this include the process for the case/control MR study
-- **/association_scripts** contains R scripts for running correlation analysis, and regression analysis
-- **/analytic_scripts** contains scripts for analyzing, visualizing and summarizing results from the above analysis
-- **/data_processing** contains scripts for pre-processing ABCD data and for creating **PLINK** phenotype files
+- **/association_scripts** contains R scripts for running correlation analysis, and regression analysis\
+- **/analytic_scripts** contains scripts for analyzing, visualizing and summarizing results from the above analysis\
+- **/data_processing** contains scripts for pre-processing ABCD data and for creating **PLINK** phenotype files\\\\\\\\
   - pre-processing includes fisher-z transformation and harmonization using neuroCombat (Fortin et al., 2018)
 
