@@ -33,5 +33,6 @@ The code is divided into 3 main directories: association analysis, gwas and mr a
 - **/analytic_scripts** contains scripts for analyzing, visualizing and summarizing results from the above analysis
 - **/data_processing** contains scripts for pre-processing ABCD data and for creating **PLINK** phenotype files
   <br>
+  <br>
   - pre-processing includes fisher-z transformation and harmonization using neuroCombat (Fortin et al., 2018)
 
