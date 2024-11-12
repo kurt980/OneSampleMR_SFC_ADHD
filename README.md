@@ -19,20 +19,25 @@ Demographic data contains values for sex, race, ethnicity and age.
 
 # Code Pipeline
 
-The code is divided into 3 main directories: association analysis, gwas and mr analysis
+The code is divided into 3 main directories: association analysis, gwas and mr analysis. The MR analysis consists of the main MR analysis and its reverse analysis; the sensitivity MR analysis with different GWAS settings; the case/control analysis using binary ADHD diagnosis as outcome
 
 - **/gwas_scripts** contains R scripts for running GWAS with different settings and parameters.
   - software included in the scripts are **PLINK1.9**(for initial main analysis), **PLINK2.0**(for GWAS with covariates), **GCTA**(for fastGWA, not included in the final study)
   - gwas scripts contain code for running GWAS on combinations of parameters: QCed/non-QCed data, and on all samples/unrelated samples
   <br>
   <br>
-- **/mr_scripts** contains R scripts for conducting MR study: 
-  - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include both the main analysis, the reverse MR analysis, the case/control analysis and sensitivity analysis
+- **/mr_scripts_main** contains R scripts for conducting the main MR study: 
+  - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this is for the the main analysis and the reverse MR analysis
     - the clumping is done using **PLINK1.9**
-  - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for main analysis, reverse MR, and sensitivity analysis
+  - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for main analysis and the reverse MR
+  <br>
+  <br>
+- **/mr_scripts_other** contains R scripts for conducting other MR studies
+  - **C+T**: C+T scripts are for running the C+T IV selection process using GWAS results; this include the case/control analysis and sensitivity analysis
+  - **2sls**: 2sls scripts are for running the 2-stage least square regression to conduct one-sample MR analysis for continuous outcome (ADHD score); this include the process for sensitivity analysis
   - **2sri**: 2sri script is for running the 2-stage residual inclusion estimation to conduct one-sample MR analysis for binary outcome (ADHD diagnosis); this include the process for the case/control MR study
   <br>
-  <br>
+  <br>  
 - **/association_scripts** contains R scripts for running correlation analysis, and regression analysis
   <br>
   <br>
