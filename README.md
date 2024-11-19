@@ -1,10 +1,10 @@
 # One-sample Mendelian Randomization for SCFC on ADHD
 
-This Github includes a pipeline to conduct a MR study for the article "Article" published in Journal.
+This Github repo includes a pipeline to conduct a MR study for the article "Article" published in Journal.
 
 # Citations
 
-If you consider using code from this Github please cite:
+If you consider using code from this Github repo please cite:
 
 # Data
 
