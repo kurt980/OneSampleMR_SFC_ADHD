@@ -1,0 +1,1043 @@
+---
+title: "inspect_ivreg_results"
+author: "Chengyan Ji"
+date: "2024-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**11/04: IV Inspection for GWASPLINK2.0 unrelated and sex and combination**
+**01/23: Changed the coloring to 2-point, because 0 was not white**
+**01/23: At the end of this code, some code is used to insepct the name and location of ROIs**
+**01/25: Changed the color to deeper for IV resutls**
+**02/05: Changed the box plot because the number are not right, NOTHING WRONG!!!! Just the outliers duplicated with dots**
+**02/14: Combine network plots into 1**
+**02/16: Changed position of brains**
+**02/23: Make 2 brain plots use the same scale, also changed NA and subcor color a bit**
+**03/07: Fix legend size, and redo some coloring of main results**
+
+```{r}
+## Plot ROIs on brain regions
+library(dplyr)
+library(snpStats)
+library(tibble)
+library(dplyr)
+library(AER)
+library(readxl)
+library(ggplot2)
+library(ggseg)
+library(ggsegGlasser)
+library(stringr)
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_SCFC_utilities/" # "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_bfile/"
+cov_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Covariates/"
+harm_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Harmonized_scfc/"
+pheno_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Phenotype/"
+tool_path <- "/Users/grc8mu/Desktop/DS/Tools/"
+
+directory <- "" #"/Users/grc8mu/Desktop/DS/1010_NetworkStudy/"
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+# read ROI name, network and other files
+network_df <- read_excel(paste0(utilities_path, "CAB-NP_v1.1_Labels-ReorderedbyNetworks.xlsx")) %>%
+  rename(roi_num = INDEX) %>% slice(1:360)
+write.csv(network_df, paste0(directory, "network_df.csv"))
+```
+
+## 1. plink2.0 both sex and unrelated samples
+## 2. plink2.0 with sex on all samples (NO)
+## 3. plink2.0 unrelated samples (NO)
+```{r}
+ivreg_plink20sexunrel_df <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08.csv", header = TRUE) %>%
+  mutate(roi_num = as.integer(gsub("roi", "", roi))) %>%
+  select(roi, roi_num, ROI, IV_Coefficient, IV_P_Value, Num_snps) %>%
+  left_join(network_df, by = c("roi_num")) %>%
+  mutate(IV_P_Value_BH = p.adjust(IV_P_Value, method = "BH")) %>% #filter(IV_P_Value < 0.05)
+  filter(IV_P_Value_BH < 0.05) #%>% filter(HEMISPHERE == "L") # %>% filter(IV_Coefficient > 0) # %>% filter(HEMISPHERE == "R")
+```
+
+```{r}
+summary_stats <- ivreg_plink20sexunrel_df %>%
+  group_by(NETWORK) %>%
+  summarise(
+    mean_effect = mean(IV_Coefficient, na.rm = TRUE),  # Calculate mean
+    median_effect = median(IV_Coefficient, na.rm = TRUE),  # Calculate median
+    num_rois = n()  # Count the number of ROIs in each network
+  ) 
+
+network_summary <- ivreg_plink20sexunrel_df %>%
+  group_by(NETWORK) %>%
+  summarise(
+    positive_count = sum(IV_Coefficient > 0),
+    negative_count = -sum(IV_Coefficient < 0)  # Negative counts to point downwards
+  ) %>%
+  tidyr::pivot_longer(cols = c(positive_count, negative_count), 
+                      names_to = "coefficient_type", 
+                      values_to = "count")
+hemisphere_counts <- ivreg_plink20sexunrel_df %>%
+  mutate(hemisphere = ifelse(grepl("^L_", ROI), "Left", "Right")) %>%
+  group_by(hemisphere) %>%
+  summarise(num_rois = n())
+
+symmetric_rois <- ivreg_plink20sexunrel_df %>%
+  mutate(roi_base = gsub("^[LR]_", "", ROI)) %>%  # Remove "L_" or "R_" prefix
+  group_by(roi_base) %>%
+  summarise(count = n()) %>%
+  filter(count == 2)  # Filter for ROIs with both left and right occurrences
+
+
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", 
+            "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5", "#c49c94", "#f7b6d2", "#c7c7c7", 
+            "#dbdb8d", "#9edae5", "#393b79", "#5254a3", "#6b6ecf", "#9c9ede", "#637939", "#8ca252", "#b5cf6b", 
+            "#cedb9c", "#8c6d31", "#bd9e39", "#e7ba52", "#e7969c", "#e7cb94", "#843c39", "#ad494a", "#d6616b", 
+            "#e7969c", "#7b4173", "#a55194", "#ce6dbd", "#de9ed6", "#393b79", "#5254a3", "#6b6ecf", "#8ca252", 
+            "#c6dbef", "#9edae5", "#6baed6", "#3182bd", "#fdd0a2", "#c6dbef", "#898888")
+bright_colors <- c("#FF0000", "#FF8000", "#FFFF00", "#80FF00", "#00FF00", 
+                   "#00FF80", "#00FFFF", "#0080FF", "#0000FF", "#8000FF", 
+                   "#FF00FF", "#FF0080", "#FF6666", "#FFB366", "#FFFF66", 
+                   "#B3FF66", "#66FF66", "#66FFB3", "#66FFFF", "#66B3FF", 
+                   "#6666FF", "#B366FF", "#FF66FF", "#FF66B3", "#FF3333", 
+                   "#FF9933", "#99FF33", "#33FF99", "#3399FF", "#9933FF")
+cl <- c("#00FF00", "#80FF00", "#000000", "#FF3333", "#FF0000")
+cl <- c("#00FF00", "#4DFF00", "#80FF00", "#B3FF00", "#E6FF00",  # Green shades
+        "#999900", "#666600",  # Transition to darker green/yellow
+        "#333300", "#000000",  # Black
+        "#330000", "#660000", "#990000", "#CC0000", "#FF3333", "#FF1A1A", "#FF0000")  # Red shades
+
+# Reorder coefficient types so that "positive_count" comes before "negative_count"
+network_summary <- network_summary %>%
+  mutate(coefficient_type = factor(coefficient_type, levels = c("positive_count", "negative_count")))
+# Create the bar plot with enhanced readability
+plot <- ggplot(network_summary, aes(x = NETWORK, y = count, fill = coefficient_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.7) +  # Side-by-side bars
+  labs(title = "Number of ROIs with Positive and Negative Effects by Network",
+       x = "NETWORK", y = "Number of ROIs", fill = "Coefficient Type") +
+  theme_minimal() +
+    theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.background = element_rect(fill = "white", color = NA),  # Grey background for plot area
+    plot.background = element_rect(fill = "white", color = NA),   # Grey background for the entire plot
+    panel.grid.major.x = element_blank(),                          # Remove vertical major grid lines
+    panel.grid.minor.x = element_blank(),                          # Remove vertical minor grid lines
+    panel.grid.major.y = element_line(color = "grey", linewidth = 0.5),# Keep horizontal major grid lines
+    panel.grid.minor.y = element_blank()                           # Optionally, remove minor horizontal grids
+  ) +
+  scale_fill_manual(values = c("positive_count" = "#A52A2A", "negative_count" = "#4169E1"),
+                    labels = c("positive_count" = "Number of Positive Effects", 
+                               "negative_count" = "Number of Negative Effects")) +
+  scale_y_continuous(labels = abs, expand = expansion(mult = c(0, 0))) +  # Show positive y-axis labels
+  geom_vline(xintercept = seq(1.5, length(unique(network_summary$NETWORK)) - 0.5, by = 1), 
+             color = "grey80", linetype = "dashed")  # Add dashed lines between each network
+
+print(plot)
+
+ggsave(filename = paste0(directory, "count_rois_ivplink20sexunrel_bh.png"), plot = plot, width = 8, height = 4)
+
+#===============================================================================
+# Create a box plot of the coefficients for each network
+box_plot <- ggplot(ivreg_plink20sexunrel_df, aes(x = NETWORK, y = IV_Coefficient)) +
+  geom_boxplot(fill = alpha("skyblue", 0.5), width = 0.5) +  # Set the same color for all box plots
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.7, color = "darkblue") + # 
+  labs(title = "Distribution of IV Coefficients by Network",
+       x = "Network", y = "IV Coefficient") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for readability
+    panel.background = element_rect(fill = "white", color = NA),  # White background for the plot area
+    plot.background = element_rect(fill = "white", color = NA),   # White background for the entire plot
+    panel.grid.major = element_line(color = "gray90"),  # Optional: Light gray grid lines
+    panel.grid.minor = element_blank()  # Remove minor grid lines
+  )
+
+print(box_plot)
+
+# Save the box plot
+ggsave(filename = paste0(directory, "box_rois_ivplink20sexunrel_bh.png"), plot = box_plot, width = 8, height = 4)
+
+```
+
+## plot on brain
+03/07: Modified legend size and coloring again!
+```{r}
+# 01/23 No longer in use
+cl <- c("#00008B", "#4169E1", "#87CEFA", "#FFFFFF", "#FFB6C1", "#FF6347", "#8B0000")
+
+
+ivreg_plink20sexunrel_df <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08.csv", header = TRUE) %>%
+  mutate(roi_num = as.integer(gsub("roi", "", roi))) %>%
+  mutate(ROI = roi) %>%
+  select(roi_num, ROI, IV_Coefficient, IV_P_Value, Num_snps) %>%
+  left_join(network_df, by = c("roi_num")) %>%
+  mutate(IV_P_Value_BH = p.adjust(IV_P_Value, method = "BH")) %>% #filter(IV_P_Value < 0.05)
+  filter(IV_P_Value_BH < 0.05) #%>% filter(HEMISPHERE == "L") # %>% filter(IV_Coefficient > 0) # %>% filter(HEMISPHERE == "R")
+###########################################################################
+roi_glasser <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') %>% str_split(.,"_",simplify = TRUE) %>% data.frame() # remember to read coupling_cbcl.RData
+colnames(roi_glasser) <- c("hemi","region")
+roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+roi_glasser <- roi_glasser %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI))
+roi_glasser <- roi_glasser %>%
+  inner_join(ivreg_plink20sexunrel_df, by = "ROI")  # ROI is name
+
+#===============test
+gldata <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser[,6]
+)
+### cortical_position (i.e., how do we want the brain to be positioned)
+cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+### choose color palette
+library(RColorBrewer)
+# display.brewer.all()
+color <- rev(brewer.pal(11, 'RdBu'))
+library(scales)
+# show_col(color)
+
+min_value <- min(gldata$Estimate, na.rm = TRUE)
+quantiles <- quantile(gldata$Estimate, probs = c(0.25,0.5,0.75), na.rm = TRUE)
+max_value <- max(gldata$Estimate, na.rm = TRUE)
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(atlas = glasser,
+             position = position_brain(side ~ hemi), ### there is different options like "horizontal", "side ~ hemi" cortical_pos
+             aes(fill = Estimate)) + scale_fill_gradient2(low = "#0e5674",
+                                                          mid = "#FFFFFF",
+                                                          high = "#a93d3d", midpoint = 0,
+                                                          na.value = "#c7c7c7",
+                                                          breaks=c(min_value, quantiles[1], 0, quantiles[3], max_value),
+                                                          labels=c(round(min_value,2), round(quantiles[1],2), 0, round(quantiles[3],2), round(max_value,2)),
+                                                          limits=c(min_value, max_value)) + ggtitle("Cortical Regions")+
+             # aes(fill = Estimate)) + scale_fill_gradient2(low = muted("#00008B"),
+             #                                              mid = "#FFFFFF",
+             #                                              high = muted("#8B0000"), #midpoint = 0.05,
+             #                                              na.value = "#c7c7c7",
+             #                                              breaks=c(min_value, quantiles[1], 0, quantiles[3], max_value),
+             #                                              labels=c(round(min_value,2), round(quantiles[1],2), 0, round(quantiles[3],2), round(max_value,2)),
+             #                                              limits=c(min_value, max_value)) + ggtitle("Cortical Regions")+
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+  theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm')) 
+#==============test
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/ivreg_plink20sexunrel", "_bh_glasser", "vert.png")), plot = plot, width = 10, height = 8, dpi = 300)
+
+#=============================================================================
+#### Get all data
+subcor <- mmp_subcor[1:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+colnames(subcor) <- c('region','hemi')
+
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI)) %>%
+  slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+aseg$data$label
+subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+subcor <- subcor %>%
+  inner_join(ivreg_plink20sexunrel_df, by = "ROI")  # ROI is name
+gldata <- tibble(
+  label = subcor$label,
+  Estimate = subcor[,6]
+)
+
+min_value <- min(gldata$Estimate, na.rm = TRUE)
+quantiles <- quantile(gldata$Estimate, probs = c(0.5), na.rm = TRUE)
+max_value <- max(gldata$Estimate, na.rm = TRUE)
+plot <- gldata %>%
+    #group_by(groups) %>%
+    ggplot() +
+    geom_brain(atlas = aseg, aes(fill = Estimate))+
+    scale_fill_gradient2(low = "#0e5674",
+                         mid = "#FFFFFF", #也是只有一个情况不得已为之
+                         high = "#a93d3d", 
+                         midpoint = 0, 
+                         #colours = cl,
+                         na.value = "#c7c7c7",
+                         breaks=c(min_value, 0, max_value),
+                         labels=c(round(min_value,2), 0, round(max_value,2)),
+                         limits=c(min_value, max_value) #只有一个的话会报错，只能先comment掉了，R真是塔马的垃圾
+                         ) + ggtitle("Subcortical Regions") +
+    #ggtitle(paste(y_annot[i]))+
+    theme_bw() +
+    theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+    theme(text = element_text(size = 15)) +
+    theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/ivreg_plink20sexunrel", "_bh_glasser19", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+```
+# Plot brain using ONE scale
+03/07: Again!!!!
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+
+# Combine cortical and subcortical data to determine the global color scale
+combined_data <- bind_rows(
+  tibble(label = roi_glasser$label, Estimate = roi_glasser$IV_Coefficient),
+  tibble(label = subcor$label, Estimate = subcor$IV_Coefficient)
+)
+
+# Compute global min, max for the unified color scale
+global_min <- min(combined_data$Estimate, na.rm = TRUE)
+global_max <- max(combined_data$Estimate, na.rm = TRUE)
+
+# Define common color scale function (Only Min, 0, Max)
+common_fill_scale <- scale_fill_gradient2(
+  low = "#0e5674",
+  mid = "#FFFFFF",
+  high = "#a93d3d",
+  midpoint = 0,
+  na.value = "#c7c7c7",
+  breaks = c(global_min, 0, global_max),
+  labels = c(round(global_min, 2), "0", round(global_max, 2)),
+  limits = c(global_min, global_max)
+)
+
+#========================== Cortical Plot ==========================#
+gldata_cortical <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser$IV_Coefficient
+)
+
+# cortical_plot <- gldata_cortical %>%
+#   ggplot() +
+#   geom_brain(atlas = glasser, position = position_brain(side ~ hemi), aes(fill = Estimate)) +
+#   common_fill_scale +  # Use the common color scale
+#   ggtitle("Cortical Regions") +
+#   theme_bw() +
+#   theme(text = element_text(size = 15),
+#         panel.grid = element_blank(),
+#         axis.text = element_blank(),
+#         axis.ticks = element_blank(),
+#         panel.border = element_blank(),
+#         legend.position = 'bottom',
+#         legend.key.size = unit(1, 'cm'))
+# 
+# # Save the cortical plot
+# ggsave(paste0(directory, "visualization/ivreg_plink20sexunrel_bh_glasser_vert_onescale.png"),
+#        plot = cortical_plot, width = 10, height = 8, dpi = 300)
+
+#========================== Subcortical Plot ==========================#
+gldata_subcortical <- tibble(
+  label = subcor$label,
+  Estimate = subcor$IV_Coefficient
+)
+
+# subcortical_plot <- gldata_subcortical %>%
+#   ggplot() +
+#   geom_brain(atlas = aseg, aes(fill = Estimate)) +
+#   common_fill_scale +  # Use the common color scale
+#   ggtitle("Subcortical Regions") +
+#   theme_bw() +
+#   theme(text = element_text(size = 15),
+#         panel.grid = element_blank(),
+#         axis.text = element_blank(),
+#         axis.ticks = element_blank(),
+#         panel.border = element_blank(),
+#         legend.position = 'bottom',
+#         legend.key.size = unit(1, 'cm'))
+# 
+# # Save the subcortical plot
+# ggsave(paste0(directory, "visualization/ivreg_plink20sexunrel_bh_glasser19_onescale.png"),
+#        plot = subcortical_plot, width = 10, height = 8, dpi = 300)
+
+
+```
+
+03/07: Use a different coloring
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+
+# Define control points
+deep_blue_value <- -2.0  # Deep blue at -2
+blue_value <- -0.2       # Lighter blue close to 0
+red_value <- 0.2         # Lighter red close to 0
+deep_red_value <- 2.0    # Deep red at +2
+
+# Color palette (deep blue → blue → white → red → deep red)
+custom_colors <- c("#0e2f5a", "#3b89c5", "#FFFFFF", "#e6806e", "#a93d3d")
+custom_values <- c(deep_blue_value, blue_value, 0, red_value, deep_red_value)
+
+# Get global min/max
+global_min <- min(combined_data$Estimate, na.rm = TRUE)
+global_max <- max(combined_data$Estimate, na.rm = TRUE)
+
+# Ensure global_min and global_max are part of the scale so extremes are covered
+custom_values <- c(global_min, custom_values, global_max)
+custom_colors <- c("#0e2f5a", "#3b89c5", "#FFFFFF", "#e6806e", "#a93d3d")  # Adjust if more control points are added
+
+# Rescale the values to 0-1 (required by scale_fill_gradientn)
+custom_values_rescaled <- scales::rescale(custom_values, from = c(global_min, global_max))
+
+# Define the custom fill scale
+custom_fill_scale <- scale_fill_gradientn(
+    colours = custom_colors,
+    values = custom_values_rescaled,
+    na.value = "#c7c7c7",
+    limits = c(global_min, global_max)
+)
+
+#========================== Example Plot (Cortical) ==========================#
+cortical_plot <- gldata_cortical %>%
+    ggplot() +
+    geom_brain(atlas = glasser, position = position_brain(side ~ hemi), aes(fill = Estimate)) +
+    custom_fill_scale +
+    ggtitle("") +
+    theme_bw() +
+    theme(text = element_text(size = 15),
+          panel.grid = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.border = element_blank(),
+          legend.position = 'bottom',
+          legend.key.size = unit(1, 'cm'))
+
+ggsave(paste0(directory, "visualization/ivreg_plink20sexunrel_bh_glasser_vert_customscale.png"),
+       plot = cortical_plot, width = 10, height = 8, dpi = 300)
+
+
+#========================== Subcortical Plot ==========================#
+subcortical_plot <- gldata_subcortical %>%
+  ggplot() +
+  geom_brain(atlas = aseg, position = position_brain("vertical"), aes(fill = Estimate)) + # the position_brain() in aseg is useless
+  custom_fill_scale +  # Use the custom color scale
+  ggtitle("") +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.border = element_blank(),
+        legend.position = 'bottom',
+        legend.key.size = unit(1, 'cm'))
+
+print(subcortical_plot)
+
+# Save the subcortical plot
+ggsave(paste0(directory, "visualization/ivreg_plink20sexunrel_bh_glasser19_customscale.png"),
+       plot = subcortical_plot, width = 10, height = 8, dpi = 300)
+
+```
+
+
+02/14
+```{r}
+library(dplyr)
+ivreg_plink20sexunrel_df <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08.csv", header = TRUE) %>%
+  mutate(roi_num = as.integer(gsub("roi", "", roi))) %>%
+  select(roi, roi_num, ROI, IV_Coefficient, IV_P_Value, Num_snps) %>%
+  left_join(network_df[1:360,], by = c("roi_num")) %>%
+  mutate(IV_P_Value_BH = p.adjust(IV_P_Value, method = "BH")) %>% #filter(IV_P_Value < 0.05)
+  filter(IV_P_Value_BH < 0.05) #%>% filter(HEMISPHERE == "L") # %>% filter(IV_Coefficient > 0) # %>% filter(HEMISPHERE == "R")
+
+network_summary <- ivreg_plink20sexunrel_df %>%
+  mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK)) %>% 
+  filter(IV_P_Value_BH < 0.05) %>%  # Filter significant ROIs
+  group_by(NETWORK) %>%  # Group by network
+  summarise(Count = n()) %>%  # Count the number of ROIs per network
+  arrange(desc(Count)) %>%  # Arrange from biggest to smallest
+  mutate(NETWORK = factor(NETWORK, levels = NETWORK))  # Convert to ordered factor
+
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>% mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK))
+
+# Define colors for bars (soft colors)
+network_colors <- c(
+  "DMN" = "#A6CEE3",         # Light Blue
+  "CON" = "#FDBF6F",           # Light Orange
+  "DAN" = "#B2DF8A",           # Light Green
+  "SMN" = "#CAB2D6",           # Light Purple
+  "LANG" = "#FF9999",         # Light Red
+  "VIS2" = "#FFCC99",         # Light Peach
+  "FPN" = "#9999FF",           # Light Indigo
+  "SUBC" = "#CCEBC5",         # Light Gray
+  "AUD" = "#FDC086"          # Light Coral
+)
+
+# Darker colors for dots (deep colors)
+dot_colors <- c(
+  "DMN" = "#1F78B4",         # Deep Blue
+  "CON" = "#E6550D",           # Deep Orange
+  "DAN" = "#33A02C",           # Deep Green
+  "SMN" = "#6A3D9A",           # Deep Purple
+  "LANG" = "#E31A1C",         # Deep Red
+  "VIS2" = "#D95F02",         # Deep Peach
+  "FPN" = "#6A51A3",           # Deep Indigo
+  "SUBC" = "#4DAF4A",         # Deep Gray
+  "AUD" = "#D94801"          # Deep Coral
+)
+
+#################################################################################
+# Define abbreviations
+network_abbreviations <- c(
+  "Default" = "DMN",
+  "Cingulo-Opercular" = "CON",
+  "Dorsal-Attention" = "DAN",
+  "Somatomotor" = "SMN",
+  "Language" = "LANG",
+  "Visual2" = "VIS2",
+  "Frontoparietal" = "FPN",
+  "Subcortical" = "SUBC",
+  "Auditory" = "AUD"
+)
+
+# Define abbreviations manually using case_when
+network_summary <- network_summary %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK  # Keep original if no match
+  )) %>%
+  arrange(desc(Count)) %>%
+  mutate(NETWORK_ABBR = factor(NETWORK_ABBR, levels = NETWORK_ABBR))  # Convert to ordered factor
+
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  ))
+
+# Define scale factor for coefficient alignment
+max_count <- max(network_summary$Count, na.rm = TRUE)
+coef_scale_factor <- max_count / 4  # Adjust to scale coefficients properly
+
+# Compute bar top positions
+network_summary <- network_summary %>%
+  mutate(Bar_Top = Count)  # Top of each bar for reference
+
+# Merge Bar_Top into ivreg_plink20sexunrel_df
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>%
+  left_join(network_summary %>% select(NETWORK_ABBR, Bar_Top), by = "NETWORK_ABBR")
+
+combined_plot <- ggplot() +
+  # Bar plot: Total count of ROIs per network
+  geom_bar(data = network_summary, aes(x = NETWORK_ABBR, y = Count, fill = NETWORK_ABBR), 
+           stat = "identity", alpha = 0.6, width = 0.5) +
+  
+  # Small horizontal zero bar for each network (black bar)
+  geom_segment(data = network_summary, 
+               aes(x = as.numeric(as.factor(NETWORK_ABBR)) - 0.15,  
+                   xend = as.numeric(as.factor(NETWORK_ABBR)) + 0.15,  
+                   y = Bar_Top + (max_count * 0.05), 
+                   yend = Bar_Top + (max_count * 0.05),
+                   linetype = "Coefficient = 0"),  # Assign a name for the legend
+               color = "black", size = 1) +
+
+  # Scatter plot: Individual ROI coefficients (placed above bars)
+  geom_jitter(data = ivreg_plink20sexunrel_df, 
+              aes(x = NETWORK_ABBR, y = (IV_Coefficient * coef_scale_factor) + Bar_Top + (max_count * 0.05), color = NETWORK_ABBR), 
+              width = 0.2, alpha = 0.9, size = 2) +
+  
+  # Primary y-axis for count only (Remove right-side axis)
+  scale_y_continuous(name = "Count") +
+
+  # Apply soft colors for bars
+  scale_fill_manual(values = network_colors, guide = "none") +  # Remove legend for bars
+
+  # Apply deep colors for dots (legend removed)
+  scale_color_manual(values = dot_colors, guide = "none") +  # Remove legend for dots
+
+  # Manually define the legend for the zero bar
+  scale_linetype_manual(name = "", values = c("Coefficient = 0" = "solid")) +
+
+  # Labels and theme
+  labs(title = "",
+       x = "Network") +
+  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),  # Rotated x labels
+    axis.title.y.right = element_blank(),  # Remove right y-axis label
+    axis.ticks.y.right = element_blank(),  # Remove right y-axis ticks
+    legend.position = "right"  # Move legend to the side
+  ) +
+  
+  # Only show the custom legend for the black zero bar
+  guides(linetype = guide_legend(override.aes = list(color = "black", size = 1)))
+
+# Show the plot
+print(combined_plot)
+
+
+# Save the plot
+ggsave("visualization/bar_scatter_combined.png", plot = combined_plot, width = 14, height = 6, dpi = 300)
+
+```
+
+
+## DO OLD RESUlT FOR SPIE!!!
+
+```{r}
+library(dplyr)
+
+# Load data and preprocess
+ivreg_old_df <- read.csv("/Users/grc8mu/Desktop/DS/20250219_SPIE_preparation/old_materials/adhd_ivreg_results_adjusted.csv", 
+                         header = TRUE) %>%
+  mutate(roi = as.integer(gsub("roi", "", ROI))) %>%
+  rename(roi_num = ROI) %>%
+  select(roi, roi_num, IV_Coefficient, IV_P_Value, Num_snps) %>%
+  left_join(network_df[1:360,], by = c("roi_num")) %>%
+  mutate(IV_P_Value_BH = p.adjust(IV_P_Value, method = "BH")) %>%
+  filter(IV_P_Value_BH < 0.05)  # Filter significant ROIs
+
+# Summarize network data
+network_summary <- ivreg_old_df %>%
+  mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK)) %>%
+  group_by(NETWORK) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(NETWORK = factor(NETWORK, levels = NETWORK))
+
+ivreg_old_df <- ivreg_old_df %>%
+  mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK))
+
+# Define colors for bars (soft colors)
+network_colors <- c(
+  "Default" = "#A6CEE3", "Cingulo-Opercular" = "#FDBF6F", "Dorsal-Attention" = "#B2DF8A",
+  "Somatomotor" = "#CAB2D6", "Language" = "#FF9999", "Visual2" = "#FFCC99",
+  "Frontoparietal" = "#9999FF", "Subcortical" = "#DDDDDD", "Auditory" = "#FDC086"
+)
+
+# Darker colors for dots (deep colors)
+dot_colors <- c(
+  "Default" = "#1F78B4", "Cingulo-Opercular" = "#E6550D", "Dorsal-Attention" = "#33A02C",
+  "Somatomotor" = "#6A3D9A", "Language" = "#E31A1C", "Visual2" = "#D95F02",
+  "Frontoparietal" = "#6A51A3", "Subcortical" = "#666666", "Auditory" = "#D94801"
+)
+
+# # Define abbreviations
+# network_abbreviations <- c(
+#   "Default" = "DMN", "Cingulo-Opercular" = "CO", "Dorsal-Attention" = "DAN",
+#   "Somatomotor" = "SM", "Language" = "LANG", "Visual2" = "VIS2",
+#   "Frontoparietal" = "FP", "Subcortical" = "SUBC", "Auditory" = "AUD"
+# )
+
+# Apply abbreviations to data
+network_summary <- network_summary %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CO",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SM",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FP",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  )) %>%
+  arrange(desc(Count)) %>%
+  mutate(NETWORK_ABBR = factor(NETWORK_ABBR, levels = NETWORK_ABBR))
+
+ivreg_old_df <- ivreg_old_df %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CO",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SM",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FP",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  ))
+
+# Compute bar top positions
+max_count <- max(network_summary$Count, na.rm = TRUE)
+coef_scale_factor <- max_count / 4  # Scale factor for coefficients
+network_summary <- network_summary %>%
+  mutate(Bar_Top = Count)
+
+# Merge Bar_Top into ivreg_old_df
+ivreg_old_df <- ivreg_old_df %>%
+  left_join(network_summary %>% select(NETWORK, Bar_Top), by = "NETWORK")
+
+# Create combined plot
+combined_plot <- ggplot() +
+  # Bar plot: Total count of ROIs per network
+  geom_bar(data = network_summary, aes(x = NETWORK, y = Count, fill = NETWORK),
+           stat = "identity", alpha = 0.6, width = 0.5, show.legend = FALSE) +
+
+  # Small horizontal zero bar for each network (black bar with legend)
+  geom_segment(data = network_summary,
+               aes(x = as.numeric(as.factor(NETWORK)) - 0.15,
+                   xend = as.numeric(as.factor(NETWORK)) + 0.15,
+                   y = Bar_Top + (max_count * 0.05),
+                   yend = Bar_Top + (max_count * 0.05),
+                   linetype = "0"),  # Assign a name for the legend
+               color = "black", size = 1) +
+
+  # Scatter plot: Individual ROI coefficients (placed above bars)
+  geom_jitter(data = ivreg_old_df,
+              aes(x = NETWORK,
+                  y = (IV_Coefficient * coef_scale_factor) + Bar_Top + (max_count * 0.05),
+                  color = NETWORK),
+              width = 0.2, alpha = 0.9, size = 2) +
+
+  # Primary y-axis for count only (Remove right-side axis)
+  scale_y_continuous(name = "Count") +
+
+  # Apply soft colors for bars
+  scale_fill_manual(values = network_colors) +
+
+  # Keep dot colors but remove legend
+  scale_color_manual(values = dot_colors, guide = "none") +
+
+  # Manually define the legend for the zero bar
+  scale_linetype_manual(name = "", values = c("0" = "solid")) +
+
+  # Labels and theme
+  labs(title = "Count of Significant ROIs & Distribution of MR Coefficients per Network",
+       x = "Network") +
+
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotated x labels
+    axis.title.y.right = element_blank(),  # Remove right y-axis label
+    axis.ticks.y.right = element_blank(),  # Remove right y-axis ticks
+    legend.position = "right"  # Move legend to the right
+  ) +
+
+  # Only show the custom legend for the black zero bar
+  guides(linetype = guide_legend(override.aes = list(color = "black", size = 1)))
+
+# Show the plot
+print(combined_plot)
+
+# Save the plot
+ggsave("/Users/grc8mu/Desktop/DS/20250219_SPIE_preparation/old_materials/bar_scatter_combined.png", plot = combined_plot, width = 14, height = 6, dpi = 300)
+
+```
+
+# 03/07: 
+
+Split the NETWORK visualization again, modify the coloring to soft and deep.
+```{r}
+library(dplyr)
+ivreg_plink20sexunrel_df <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08.csv", header = TRUE) %>%
+  mutate(roi_num = as.integer(gsub("roi", "", roi))) %>%
+  select(roi, roi_num, ROI, IV_Coefficient, IV_P_Value, Num_snps) %>%
+  left_join(network_df[1:360,], by = c("roi_num")) %>%
+  mutate(IV_P_Value_BH = p.adjust(IV_P_Value, method = "BH")) %>% #filter(IV_P_Value < 0.05)
+  filter(IV_P_Value_BH < 0.05) #%>% filter(HEMISPHERE == "L") # %>% filter(IV_Coefficient > 0) # %>% filter(HEMISPHERE == "R")
+
+network_summary <- ivreg_plink20sexunrel_df %>%
+  mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK)) %>% 
+  filter(IV_P_Value_BH < 0.05) %>%  # Filter significant ROIs
+  group_by(NETWORK) %>%  # Group by network
+  summarise(Count = n()) %>%  # Count the number of ROIs per network
+  arrange(desc(Count)) %>%  # Arrange from biggest to smallest
+  mutate(NETWORK = factor(NETWORK, levels = NETWORK))  # Convert to ordered factor
+
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>% mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical", NETWORK))
+
+# Define colors for bars (soft colors)
+network_colors <- c(
+  "DMN" = "#55a9d1",         # Light Blue
+  "CON" = "#7474cb",           # Light Orange
+  "DAN" = "#69b842",           # Light Green
+  "SMN" = "#9da13f",           # Light Purple
+  "LANG" = "#9f1700",         # Light Red
+  "VIS2" = "#d0406d",         # Light Peach
+  "FPN" = "#133d86",           # Light Indigo
+  "SUBC" = "#cc5c40",         # Light Gray
+  "AUD" = "#d1a348"          # Light Coral
+)
+
+# Darker colors for dots (deep colors)
+dot_colors <- c(
+  "DMN" = "#55a9d1",         # Light Blue
+  "CON" = "#7474cb",           # Light Orange
+  "DAN" = "#69b842",           # Light Green
+  "SMN" = "#9da13f",           # Light Purple
+  "LANG" = "#9f1700",         # Light Red
+  "VIS2" = "#d0406d",         # Light Peach
+  "FPN" = "#133d86",           # Light Indigo
+  "SUBC" = "#cc5c40",         # Light Gray
+  "AUD" = "#d1a348"          # Light Coral
+)
+
+#################################################################################
+# Define abbreviations
+network_abbreviations <- c(
+  "Default" = "DMN",
+  "Cingulo-Opercular" = "CON",
+  "Dorsal-Attention" = "DAN",
+  "Somatomotor" = "SMN",
+  "Language" = "LANG",
+  "Visual2" = "VIS2",
+  "Frontoparietal" = "FPN",
+  "Subcortical" = "SUBC",
+  "Auditory" = "AUD"
+)
+
+# Define abbreviations manually using case_when
+network_summary <- network_summary %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK  # Keep original if no match
+  )) %>%
+  arrange(desc(Count)) %>%
+  mutate(NETWORK_ABBR = factor(NETWORK_ABBR, levels = NETWORK_ABBR))  # Convert to ordered factor
+
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>%
+  mutate(NETWORK_ABBR = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  ))
+
+# Define scale factor for coefficient alignment
+max_count <- max(network_summary$Count, na.rm = TRUE)
+coef_scale_factor <- max_count / 4  # Adjust to scale coefficients properly
+
+# Compute bar top positions
+network_summary <- network_summary %>%
+  mutate(Bar_Top = Count)  # Top of each bar for reference
+
+# Merge Bar_Top into ivreg_plink20sexunrel_df
+ivreg_plink20sexunrel_df <- ivreg_plink20sexunrel_df %>%
+  left_join(network_summary %>% select(NETWORK_ABBR, Bar_Top), by = "NETWORK_ABBR")
+
+combined_plot <- ggplot() +
+  # Bar plot: Total count of ROIs per network
+  geom_bar(data = network_summary, aes(x = NETWORK_ABBR, y = Count, fill = NETWORK_ABBR), 
+           stat = "identity", alpha = 0.6, width = 0.5) +
+  
+  # Small horizontal zero bar for each network (black bar)
+  geom_segment(data = network_summary, 
+               aes(x = as.numeric(as.factor(NETWORK_ABBR)) - 0.15,  
+                   xend = as.numeric(as.factor(NETWORK_ABBR)) + 0.15,  
+                   y = Bar_Top + (max_count * 0.05), 
+                   yend = Bar_Top + (max_count * 0.05),
+                   linetype = "Coefficient = 0"),  # Assign a name for the legend
+               color = "black", size = 1) +
+
+  # Scatter plot: Individual ROI coefficients (placed above bars)
+  geom_jitter(data = ivreg_plink20sexunrel_df, 
+              aes(x = NETWORK_ABBR, y = (IV_Coefficient * coef_scale_factor) + Bar_Top + (max_count * 0.05), color = NETWORK_ABBR), 
+              width = 0.2, alpha = 0.9, size = 2) +
+  
+  # Primary y-axis for count only (Remove right-side axis)
+  scale_y_continuous(name = "Count") +
+
+  # Apply soft colors for bars
+  scale_fill_manual(values = network_colors, guide = "none") +  # Remove legend for bars
+
+  # Apply deep colors for dots (legend removed)
+  scale_color_manual(values = dot_colors, guide = "none") +  # Remove legend for dots
+
+  # Manually define the legend for the zero bar
+  scale_linetype_manual(name = "", values = c("Coefficient = 0" = "solid")) +
+
+  # Labels and theme
+  labs(title = "",
+       x = "Network") +
+  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),  # Rotated x labels
+    axis.title.y.right = element_blank(),  # Remove right y-axis label
+    axis.ticks.y.right = element_blank(),  # Remove right y-axis ticks
+    legend.position = "right"  # Move legend to the side
+  ) +
+  
+  # Only show the custom legend for the black zero bar
+  guides(linetype = guide_legend(override.aes = list(color = "black", size = 1)))
+
+# Show the plot
+print(combined_plot)
+
+
+# Save the plot
+ggsave("visualization/bar_scatter_combined.png", plot = combined_plot, width = 14, height = 6, dpi = 300)
+```
+separate the plots
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggbeeswarm)
+
+# ===================== Bar Plot: ROI Counts per Network =====================
+bar_y_limits <- c(0, 12)  # **Manually Set Y Limits**
+bar_grid_breaks <- seq(0, 12, by = 3)  # **Manually Set Grid Lines**
+
+bar_plot <- ggplot(network_summary, aes(x = NETWORK_ABBR, y = Count, fill = NETWORK_ABBR)) +
+  geom_bar(stat = "identity", alpha = 0.85, width = 0.35) +  # Bars for count
+
+  # Add text on top of bars, matching the bar's color
+  geom_text(aes(label = Count), vjust = -0.5, size = 7.5, fontface = "bold", 
+            color = network_colors[network_summary$NETWORK_ABBR]) +
+
+  scale_fill_manual(values = network_colors, guide = "none") +  
+
+  # **Manually Set Y Limits & Grid Lines**
+  scale_y_continuous(name = "Count", 
+                     limits = bar_y_limits, 
+                     breaks = bar_grid_breaks,  # **Set Grid Positions**
+                     expand = c(0, 0)) +  
+
+  labs(title = "", x = "Network") +
+
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1),  
+    axis.ticks.y.right = element_blank(),  
+    legend.position = "none",
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
+  )
+
+ggsave("visualization/bar_plot.png", plot = bar_plot, width = 6, height = 6, dpi = 300)
+
+
+# ===================== Scatter Plot: Distribution of Coefficients =====================
+scatter_y_limits <- c(-2, 2.5)  # **Manually Set Y Limits**
+scatter_grid_breaks <- seq(-2, 2.5, by = 0.5)  # **Manually Set Grid Lines**
+
+network_levels <- network_summary$NETWORK_ABBR
+ivreg_plink20sexunrel_df$NETWORK_ABBR <- factor(ivreg_plink20sexunrel_df$NETWORK_ABBR, levels = network_levels)
+
+scatter_plot <- ggplot(ivreg_plink20sexunrel_df, aes(x = NETWORK_ABBR, y = IV_Coefficient, color = NETWORK_ABBR)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "black", size = 0.8) +  
+
+  # **Fix dot alignment: Reduce scatter but keep slight separation for visibility**
+  geom_point(position = position_jitter(width = 0.15, height = 0), alpha = 0.95, size = 2) +
+
+  scale_color_manual(values = dot_colors, guide = "none") + 
+
+  # **Manually Set Y Limits & Grid Lines**
+  scale_y_continuous(name = NULL,  
+                     sec.axis = dup_axis(name = "IV Coefficient"),  
+                     limits = scatter_y_limits,  
+                     breaks = scatter_grid_breaks,  
+                     expand = c(0, 0)) +  
+
+  labs(title = "", x = "Network") +  
+
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_blank(),  
+    axis.ticks.y.left = element_blank(),  
+    axis.title.y.left = element_blank(),  
+    axis.text.y.right = element_text(size = 10),  
+    axis.title.y.right = element_text(size = 12),  
+    legend.position = "none",
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
+  )
+
+ggsave("visualization/scatter_plot.png", plot = scatter_plot, width = 6, height = 6, dpi = 300)
+
+# Print both plots
+print(bar_plot)
+print(scatter_plot)
+
+```
+```{r}
+bar_plot <- ggplot(network_summary, aes(x = NETWORK_ABBR, y = Count, fill = NETWORK_ABBR)) +
+  geom_bar(stat = "identity", alpha = 0.8, width = 0.35) +  # Bars for count
+
+  scale_fill_manual(values = network_colors, guide = "none") +  # Remove legend for bars
+
+  # Ensure y-axis grid alignment
+  scale_y_continuous(
+    name = "Count",
+    breaks = seq(0, 12, by = 3),  # Define fixed grid spacing
+    limits = c(0, 15),
+    expand = c(0, 0)  # Remove extra padding
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    panel.grid.major.x = element_blank(),  # Remove vertical grids
+    axis.text.x = element_text(angle = 0, hjust = 1),  # Rotated x labels
+    axis.ticks.y.right = element_blank(),  # Remove right y-axis ticks
+    legend.position = "none"
+  )
+
+# Save the bar plot
+ggsave("visualization/bar_plot.png", plot = bar_plot, width = 5, height = 6, dpi = 300)
+
+scatter_plot <- ggplot(ivreg_plink20sexunrel_df, aes(x = NETWORK_ABBR, y = IV_Coefficient, color = NETWORK_ABBR)) +
+
+  # Horizontal reference line at 0
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) + 
+
+  # Scatter plot to show distribution of coefficients
+  geom_point(position = position_dodge2(width = 0.2, preserve = "single"), alpha = 0.95, size = 2) +
+
+  scale_color_manual(values = dot_colors, guide = "none") +  # Remove legend for dots
+
+  # **Ensure y-axis grid alignment**
+  scale_y_continuous(
+    name = "IV Coefficient",
+    breaks = seq(-4,4, by = 2),  # Fixed grid spacing
+    limits = c(-4, 4),
+    expand = c(0, 0)  # Remove extra padding
+  ) +
+
+  labs(title = "", x = "Network") +
+
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    panel.grid.major.x = element_blank(),  # Remove vertical grids
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    legend.position = "none"
+  )
+
+# Save the scatter plot
+ggsave("visualization/scatter_plot.png", plot = scatter_plot, width = 5, height = 6, dpi = 300)
+
+```
+
+

@@ -1,0 +1,754 @@
+---
+title: "plot_scfc"
+output: html_document
+date: "2024-10-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**10/21: This is for plotting SCFC values after Fisher Transform and Harmonization on the brain**
+**11/01: Added 1. plot SCFCs distribution to show skewness; 2. plot SCFC by networks**
+**11/26: Plot demographics**
+**03/07: Use new color scheme**
+**03/20: Modify for Windows**
+**03/22: Remove Brainstem**
+
+## Read results and plot on brain regions
+```{r}
+## Plot ROIs on brain regions
+########## Brain Visualization #########
+library(ggseg)
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(tidyr)
+### glasser atlas ########
+### The first 360 regions of interest (ROIs) are from the Glasser atlas
+### We will use ggsegGlasser to visulize them
+library(ggsegGlasser)
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_bfile/"
+cov_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Covariates/"
+harm_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Harmonized_scfc/"
+pheno_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Phenotype/"
+tool_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/Tools/"
+
+directory <- ""
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+# read ROI name, network and other files
+network_df <- read_excel(paste0(utilities_path, "CAB-NP_v1.1_Labels-ReorderedbyNetworks.xlsx")) %>%
+  rename(roi_num = INDEX) %>%
+  mutate(ROI = paste0("roi",roi_num))
+write.csv(network_df, paste0(directory, "network_df.csv"))
+```
+
+# 1126: Plot demographics
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Reshape the data to a long format for grouping and plotting, excluding "NA" levels
+demo_long <- demo_cbcl_base_scfc %>%
+  select(sex, race, ethn) %>%
+  pivot_longer(cols = c(sex, race, ethn), names_to = "Variable", values_to = "Level") %>%
+  filter(!is.na(Level) & Level != "NA")  # Exclude NA levels explicitly
+
+# Define custom colors
+custom_colors <- c("sex" = "skyblue", "race" = "lightgreen", "ethn" = "lightcoral")
+
+# Create the bar plot
+bar_plot <- ggplot(demo_long, aes(x = Level, fill = Variable)) +
+  geom_bar(width = 0.75) +  # Create bars for each level
+  facet_grid(~ Variable, scales = "free_x", space = "free") +  # Arrange variables side by side
+  scale_fill_manual(values = custom_colors) +  # Set custom colors
+  labs(title = "ABCD Study Demographic Information",
+       x = "Level", y = "Count") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    panel.grid.major.x = element_blank(),  # Clean grid lines between facets
+    strip.text = element_text(face = "bold"),  # Bold facet labels
+    legend.position = "none"  # Remove legend
+  )
+
+# Display the plot
+print(bar_plot)
+
+ggsave(paste0(directory, paste0("visualization/demo_info", ".png")), plot = bar_plot, width = 12, height = 8, dpi = 300)
+```
+
+## Plot!
+```{r}
+library(stringr)
+mmp <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') # remember to read coupling_cbcl.RData
+person <- c(1:6381)
+scfc_results <- paste0(harm_path, "alldf_trans_harm2.csv")
+scfc_df <- read.csv(paste0(scfc_results)) %>%
+  slice(person) %>% # select the first person's scfc values
+  select(9:ncol(.)) %>%
+  pivot_longer(cols = everything(), names_to = "ROI_name", values_to = "scfc_value") %>%
+  mutate(ROI = paste0("roi", row_number()))
+############################################################################
+roi_glasser <- mmp %>% str_split(.,"_",simplify = TRUE) %>% data.frame()
+colnames(roi_glasser) <- c("hemi","region")
+roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+roi_glasser <- roi_glasser %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI))
+roi_glasser <- roi_glasser %>%
+  inner_join(scfc_df, by = "ROI")  # ROI is name
+
+#===========================================================================
+gldata <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser[,6]
+)
+    
+### cortical_position (i.e., how do we want the brain to be positioned)
+cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+### choose color palette
+library(RColorBrewer)
+# display.brewer.all()
+color <- rev(brewer.pal(11, 'RdBu'))
+library(scales)
+# show_col(color)
+
+### plot the coupling value in brain
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(atlas = glasser, 
+             position = position_brain(cortical_pos), ### there is different options like "horizontal", "side ~ hemi"
+             aes(fill = Estimate)) + scale_fill_gradient2(low = muted("blue"),
+                                                          # mid = "gre",
+                                                          high = muted("red"), #midpoint = 0.05, 
+                                                          na.value = "white")+ggtitle("Glasser") +
+                                                          theme_bw() +
+                                                          theme(text = element_text(size = 10)) +
+                                                          theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank()) +
+                                                          theme(legend.position = 'bottom') + 
+                                                          theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/SCFC_person", person, "_glasser", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+    
+#=============================================================================
+#### Get all data
+subcor <- mmp_subcor[361:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+colnames(subcor) <- c('region','hemi')
+
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI)) %>%
+  slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+aseg$data$label
+subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+# Joining roi_glasser with assoc_df to align data
+subcor <- subcor %>%
+  inner_join(scfc_df, by = "ROI")  # ROI is name
+
+gldata <- tibble(
+  label = subcor$label,
+  Estimate = subcor[,6]
+)
+plot <- gldata %>%
+    #group_by(groups) %>%
+    ggplot() +
+    geom_brain(atlas = aseg, aes(fill = Estimate))+
+    scale_fill_gradient2(low = muted("blue"),
+                         mid = "white",
+                         high = muted("red"),midpoint = 0, na.value = "white")+
+    #ggtitle(paste(y_annot[i]))+
+    theme_bw() +
+    theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+    theme(text = element_text(size = 15)) +
+    theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/SCFC_person", person, "_glasser_subcor", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+```
+## Plot Distribution of SCFCs and ADHD
+```{r}
+library(stringr)
+mmp <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') # remember to read coupling_cbcl.RData
+person <- 1
+scfc_results <- paste0(harm_path, "alldf_trans_harm2.csv")
+scfc_df <- read.csv(paste0(scfc_results)) %>%
+  slice(person) %>% # select the first person's scfc values
+  select(9:ncol(.)) %>%
+  pivot_longer(cols = everything(), names_to = "ROI_name", values_to = "scfc_value") %>%
+  mutate(ROI = paste0("roi", row_number()))
+################################################################################
+# Density plot of SCFC values to visualize skewness
+scfc_density_plot <- ggplot(scfc_df, aes(x = scfc_value)) +  # Replace `SCFC_values` with the actual column name
+  geom_density(fill = "#a8ddb5", alpha = 0.5) +  # Density plot with color fill
+  labs(title = "Distribution of SCFC Values", x = "SCFC Values", y = "Density") +
+  theme_minimal()
+
+# Save the density plot
+ggsave(filename = "visualization/scfc_distribution_plot.png", plot = scfc_density_plot, width = 8, height = 4)
+
+################################################################################
+adhd_df <- demo_cbcl_base_scfc %>%
+  select(subjectkey, site_id_l, cbcl_scr_dsm5_adhd_t)
+
+adhd_density_plot <- ggplot(adhd_df, aes(x = cbcl_scr_dsm5_adhd_t)) +  # Replace `SCFC_values` with the actual column name
+  geom_density(fill = "#a8ddb5", alpha = 0.5) +  # Density plot with color fill
+  labs(title = "Distribution of ADHD Scores", x = "ADHD Scores", y = "Density") +
+  theme_minimal()
+
+# Save the density plot
+ggsave(filename = "visualization/adhd_distribution_plot.png", plot = adhd_density_plot, width = 8, height = 4)
+
+#===============================================================================
+adhd_histogram_plot <- ggplot(adhd_df, aes(x = cbcl_scr_dsm5_adhd_t)) +
+  geom_histogram(fill = "#a8ddb5", color = "black", bins = 30, alpha = 0.7) +  # Histogram with custom bin width and color
+  labs(title = "Distribution of ADHD Scores", x = "ADHD Scores", y = "Count") +
+  theme_minimal()
+
+# Save the histogram plot
+ggsave(filename = "visualization/adhd_distribution_hist_plot.png", plot = adhd_histogram_plot, width = 8, height = 4)
+
+```
+
+### 02/15: Plot male vs. female
+```{r}
+adhd_df <- demo_cbcl_base_scfc %>%
+  select(subjectkey, site_id_l, sex, cbcl_scr_dsm5_adhd_t)
+
+adhd_density_plot <- ggplot(adhd_df, aes(x = cbcl_scr_dsm5_adhd_t, fill = sex)) +  
+  geom_density(alpha = 0.5) +  # Transparent density for overlap
+  scale_fill_manual(values = c("F" = "#FF9999", "M" = "#56B4E9")) +  # Custom colors for F & M
+  labs(title = "Distribution of ADHD Scores by Sex", 
+       x = "ADHD Scores", 
+       y = "Density", 
+       fill = "Sex") +  # Legend label
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        legend.position = "right")  # Position legend to the right
+
+# Print the plot
+print(adhd_density_plot)
+
+# Save the density plot
+ggsave(filename = "visualization/adhd_distribution_fvm_plot.png", plot = adhd_density_plot, width = 8, height = 4)
+```
+
+################################################################################
+## Plot ROIs by Network
+```{r}
+library(stringr)
+person <- 1
+scfc_results <- paste0(harm_path, "alldf_trans_harm2.csv")
+scfc_df <- read.csv(paste0(scfc_results)) %>%
+  slice(person) %>% # select the first person's scfc values
+  select(9:ncol(.)) %>%
+  pivot_longer(cols = everything(), names_to = "ROI_name", values_to = "scfc_value") %>%
+  mutate(ROI = paste0("roi", row_number())) %>%
+  left_join(network_df[1:360,], by = "ROI")
+```
+
+```{r}
+scfc_df <- scfc_df %>%
+  mutate(NETWORK = case_when(
+    NETWORK == "Visual1" ~ "Visual1 (VIS1)",
+    NETWORK == "Visual2" ~ "Visual2 (VIS2)",
+    NETWORK == "Somatomotor" ~ "Somatomotor (SMN)",
+    NETWORK == "Cingulo-Opercular" ~ "Cingulo-Opercular (CON)",
+    NETWORK == "Dorsal-Attention" ~ "Dorsal-Attention (DAN)",
+    NETWORK == "Language" ~ "Language (LANG)",
+    NETWORK == "Frontoparietal" ~ "Frontoparietal (FPN)",
+    NETWORK == "Auditory" ~ "Auditory (AUD)",
+    NETWORK == "Posterior-Multimodal" ~ "Posterior-Multimodal (PMN)",
+    NETWORK == "Default" ~ "Default (DMN)",
+    NETWORK == "Orbito-Affective" ~ "Orbito-Affective (OAN)",
+    NETWORK == "Ventral-Multimodal" ~ "Ventral-Multimodal (VMN)",
+    TRUE ~ NETWORK  # Keep unchanged if not in the list
+  )) %>%
+  mutate(NETWORK = ifelse(is.na(NETWORK), "Subcortical (SUBC)", NETWORK))
+
+# Preserve existing colors but replace SUBC with a new color
+network_colors <- c(
+  "Default (DMN)" = "#55a9d1",         # Light Blue
+  "Cingulo-Opercular (CON)" = "#7474cb", # Light Orange
+  "Dorsal-Attention (DAN)" = "#69b842",  # Light Green
+  "Somatomotor (SMN)" = "#9da13f",       # Light Purple
+  "Language (LANG)" = "#9f1700",        # Light Red
+  "Visual2 (VIS2)" = "#d0406d",         # Light Peach
+  "Frontoparietal (FPN)" = "#133d86",    # Light Indigo
+  "Subcortical (SUBC)" = "#cc5c40",     # Light Pastel Green (new color)
+  "Auditory (AUD)" = "#d1a348"          # Light Coral
+)
+
+# Assign new colors for additional networks
+extra_network_colors <- c(
+  "Visual1 (VIS1)" = "#FFB6C1",         # Light Pink
+  "Posterior-Multimodal (PMN)" = "#1a6f60", # Soft Lime
+  "Orbito-Affective (OAN)" = "#bc6173",  # Light Lavender
+  "Ventral-Multimodal (VMN)" = "#8DD3C7" # Light Cyan
+)
+
+# Merge into a single color palette
+network_colors <- c(network_colors, extra_network_colors)
+
+# Prepare roi_glasser data
+roi_glasser <- (mmp_subcor[1:379] %>% str_remove(.,'_ROI')) %>% # remember to read coupling_cbcl.RData %>% 
+  str_split(.,"_",simplify = TRUE) %>% 
+  data.frame() %>%
+  setNames(c("hemi","region")) %>%
+  tibble::rownames_to_column(var = "roi_num") %>%
+  mutate(roi_num = as.integer(roi_num),
+         label = ifelse(hemi == 'L', paste0("lh_L_", region), paste0("rh_R_", region)))
+
+# Join data and map network colors
+roi_glasser <- roi_glasser %>%
+  inner_join(scfc_df, by = "roi_num")
+
+# Data for plotting
+gldata <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser$scfc_value,
+  NETWORK = roi_glasser$NETWORK  # Use NETWORK as a factor for color mapping
+)
+
+# Define brain view positions
+cortical_pos <- c("left lateral", "right lateral", "left medial", "right medial")
+
+# Plot with network colors and legend
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(
+    atlas = glasser, 
+    position = position_brain(side ~ hemi), 
+    aes(fill = NETWORK)
+  ) +
+  scale_fill_manual(values = network_colors, na.value = "#c7c7c7") +  # Map NETWORK to colors with a legend
+  labs(fill = "Network") +  # Change legend title
+  theme_bw() +
+  theme(
+    text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_blank(),
+    legend.position = 'bottom',  # Position the legend at the bottom
+    legend.key.size = unit(1, 'cm')
+  )
+
+print(plot)
+
+# Save the plot
+ggsave(filename = paste0("visualization/cortical_network", ".png"), plot = plot, width = 10, height = 8, dpi = 300)
+
+#########################################################################################################################
+
+# Joining roi_glasser with assoc_df to align data
+#### Get all data
+subcor <- mmp_subcor[361:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+colnames(subcor) <- c('region','hemi')
+
+#################################################
+# Remove Brainstem from data
+subcor <- subcor[1:18,]
+#################################################
+
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = as.numeric(ROI)) %>%
+  mutate(ROI = 360 + ROI) %>%
+  mutate(ROI = paste0("roi", ROI)) %>%
+  slice((n() - 18):n()) # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+subcor <- subcor %>%
+  inner_join(scfc_df, by = "ROI")  # ROI is name
+
+
+aseg$data$label
+subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+#subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+gldata <- tibble(
+  label = subcor$label,
+  NETWORK = subcor$NETWORK
+)
+
+plot <- gldata %>%
+    #group_by(groups) %>%
+    ggplot() +
+    geom_brain(atlas = aseg, 
+               aes(fill = NETWORK)
+               ) +
+    scale_fill_manual(values = network_colors, na.value = "#c7c7c7") +
+    labs(fill = "Network") +  # Change legend title
+    #ggtitle(paste(y_annot[i]))+
+    theme_bw() +
+    theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+    theme(text = element_text(size = 10)) +
+    theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+
+print(plot)
+
+ggsave(paste0(directory, paste0("visualization/subcortical_network", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+
+```
+
+```{r}
+colors <- c("#FFC0CB",  # Bright Red
+            "#FFE4E1",  # Bright Green
+            "#00FFFF",  # Bright Blue
+            "#ffff76",  # Bright Yellow
+            "#00008B",  # Magenta
+            "#E31A1C",  # Cyan
+            "#FFA500",  # Orange
+            "#800080",  # Purple
+            "#008000",  # Dark Green
+            "#1E90FF",  # Pink
+            "#A52A2A",  # Brown
+            "#a8ddb5")  # Black
+
+unique_networks <- unique(scfc_df$NETWORK)
+network_colors <- setNames(colors[1:length(unique_networks)], unique_networks)
+
+scfc_df <- scfc_df %>%
+  mutate(NETWORK = factor(NETWORK, levels = unique_networks))
+
+# Prepare roi_glasser data
+roi_glasser <- mmp %>% 
+  str_split(.,"_",simplify = TRUE) %>% 
+  data.frame() %>%
+  setNames(c("hemi","region")) %>%
+  tibble::rownames_to_column(var = "roi_num") %>%
+  mutate(roi_num = as.integer(roi_num),
+         label = ifelse(hemi == 'L', paste0("lh_L_", region), paste0("rh_R_", region)))
+
+# Join data and map network colors
+roi_glasser <- roi_glasser %>%
+  inner_join(scfc_df, by = "roi_num")
+
+# Data for plotting
+gldata <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser$scfc_value,
+  NETWORK = roi_glasser$NETWORK  # Use NETWORK as a factor for color mapping
+)
+
+# Define brain view positions
+cortical_pos <- c("left lateral", "right lateral", "left medial", "right medial")
+
+# Plot with network colors and legend
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(
+    atlas = glasser, 
+    position = position_brain(cortical_pos), 
+    aes(fill = NETWORK)
+  ) +
+  scale_fill_manual(values = network_colors) +  # Map NETWORK to colors with a legend
+  ggtitle("Cortical Network") +
+  theme_bw() +
+  theme(
+    text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_blank(),
+    legend.position = 'bottom',  # Position the legend at the bottom
+    legend.key.size = unit(1, 'cm')
+  )
+
+# Save the plot
+ggsave(filename = paste0(base_path, "visualization/cortical_network", ".png"), plot = plot, width = 10, height = 8, dpi = 300)
+
+################################################################################
+unique_networks <- unique(scfc_df$NETWORK)
+network_colors <- setNames(colors[1:length(unique_networks)], unique_networks)
+subcor <- mmp_subcor %>%
+  str_remove('_ROI') %>%
+  str_split('_', simplify = TRUE) %>%
+  as.data.frame()
+colnames(subcor) <- c('region', 'hemi')
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("", ROI)) %>%
+  slice((n() - 18):n())  # Select last 19 ROIs
+
+subcor$label <- paste0(str_to_title(subcor$hemi), '-', str_to_title(subcor$region))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region == 'thalamus'] <- paste0(subcor$label[subcor$region == 'thalamus'], '-Proper')
+subcor$label[subcor$region == 'diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region == 'diencephalon']), '-VentralDC')
+subcor$label[subcor$region == 'cerebellum'] <- paste0(subcor$label[subcor$region == 'cerebellum'], '-Cortex')
+
+subcor <- subcor %>%
+  mutate(roi_num = as.integer(ROI)) %>%
+  inner_join(scfc_df, by = "roi_num") %>%
+  mutate(NETWORK = factor(NETWORK, levels = unique_networks))
+
+testdata <- tibble(
+  label = subcor$label,
+  h2 = subcor$scfc_value,
+  NETWORK = subcor$NETWORK
+)
+plot <- testdata %>%
+  ggplot() +
+  geom_brain(
+    atlas = aseg,
+    aes(fill = NETWORK)
+  ) +
+  scale_fill_manual(values = network_colors) +  # Apply custom colors to each network
+  ggtitle("Subcortical Networks") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_blank(),
+    legend.position = 'bottom',
+    legend.key.size = unit(1, 'cm'),
+    text = element_text(size = 15)
+  )
+
+# Save the plot
+ggsave(filename = paste0(base_path, "visualization/subcortical_network", ".png"), plot = plot, width = 10, height = 8, dpi = 300)
+```
+
+################################################################################
+## Plot ROIs by Hemisphere
+```{r}
+library(stringr)
+person <- 1
+scfc_results <- paste0(harm_path, "alldf_trans_harm2.csv")
+scfc_df <- read.csv(paste0(scfc_results)) %>%
+  slice(person) %>% # select the first person's scfc values
+  select(9:ncol(.)) %>%
+  pivot_longer(cols = everything(), names_to = "ROI_name", values_to = "scfc_value") %>%
+  mutate(ROI = paste0("roi", row_number())) %>%
+  inner_join(network_df, by = "ROI")
+```
+
+```{r}
+colors <- c("#FFC0CB",  # Bright Red
+            "#FFE4E1",  # Bright Green
+            "#00FFFF",  # Bright Blue
+            "#ffff76",  # Bright Yellow
+            "#00008B",  # Magenta
+            "#E31A1C",  # Cyan
+            "#FFA500",  # Orange
+            "#800080",  # Purple
+            "#008000",  # Dark Green
+            "#1E90FF",  # Pink
+            "#A52A2A",  # Brown
+            "#a8ddb5")  # Black
+
+unique_networks <- unique(scfc_df$NETWORK)
+network_colors <- setNames(colors[1:length(unique_networks)], unique_networks)
+
+scfc_df <- scfc_df %>%
+  mutate(NETWORK = factor(NETWORK, levels = unique_networks))
+
+# Prepare roi_glasser data
+roi_glasser <- mmp %>% 
+  str_split(.,"_",simplify = TRUE) %>% 
+  data.frame() %>%
+  setNames(c("hemi","region")) %>%
+  tibble::rownames_to_column(var = "roi_num") %>%
+  mutate(roi_num = as.integer(roi_num),
+         label = ifelse(hemi == 'L', paste0("lh_L_", region), paste0("rh_R_", region)))
+
+# Join data and map network colors
+roi_glasser <- roi_glasser %>%
+  inner_join(scfc_df, by = "roi_num")
+
+# Data for plotting
+gldata <- tibble(
+  label = roi_glasser$label,
+  Estimate = roi_glasser$scfc_value,
+  NETWORK = roi_glasser$NETWORK  # Use NETWORK as a factor for color mapping
+)
+
+# Define brain view positions
+cortical_pos <- c("left lateral", "right lateral", "left medial", "right medial")
+
+# Plot with network colors and legend
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(
+    atlas = glasser, 
+    position = position_brain(cortical_pos), 
+    aes(fill = NETWORK)
+  ) +
+  scale_fill_manual(values = network_colors) +  # Map NETWORK to colors with a legend
+  ggtitle("Cortical Network") +
+  theme_bw() +
+  theme(
+    text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_blank(),
+    legend.position = 'bottom',  # Position the legend at the bottom
+    legend.key.size = unit(1, 'cm')
+  )
+
+# Save the plot
+ggsave(filename = paste0(base_path, "visualization/cortical_network", ".png"), plot = plot, width = 10, height = 8, dpi = 300)
+
+################################################################################
+unique_networks <- unique(scfc_df$NETWORK)
+network_colors <- setNames(colors[1:length(unique_networks)], unique_networks)
+subcor <- mmp_subcor %>%
+  str_remove('_ROI') %>%
+  str_split('_', simplify = TRUE) %>%
+  as.data.frame()
+colnames(subcor) <- c('region', 'hemi')
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("", ROI)) %>%
+  slice((n() - 18):n())  # Select last 19 ROIs
+
+subcor$label <- paste0(str_to_title(subcor$hemi), '-', str_to_title(subcor$region))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region == 'thalamus'] <- paste0(subcor$label[subcor$region == 'thalamus'], '-Proper')
+subcor$label[subcor$region == 'diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region == 'diencephalon']), '-VentralDC')
+subcor$label[subcor$region == 'cerebellum'] <- paste0(subcor$label[subcor$region == 'cerebellum'], '-Cortex')
+
+subcor <- subcor %>%
+  mutate(roi_num = as.integer(ROI)) %>%
+  inner_join(scfc_df, by = "roi_num") %>%
+  mutate(NETWORK = factor(NETWORK, levels = unique_networks))
+
+testdata <- tibble(
+  label = subcor$label,
+  h2 = subcor$scfc_value,
+  NETWORK = subcor$NETWORK
+)
+plot <- testdata %>%
+  ggplot() +
+  geom_brain(
+    atlas = aseg,
+    aes(fill = NETWORK)
+  ) +
+  scale_fill_manual(values = network_colors) +  # Apply custom colors to each network
+  ggtitle("Subcortical Networks") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.border = element_blank(),
+    legend.position = 'bottom',
+    legend.key.size = unit(1, 'cm'),
+    text = element_text(size = 15)
+  )
+
+# Save the plot
+ggsave(filename = paste0(base_path, "visualization/subcortical_network", ".png"), plot = plot, width = 10, height = 8, dpi = 300)
+```
+
+```{r}
+  # #-------------------------------------------plot first 360 ROIs----------------------------------------------------------
+  # roi_glasser <- roi_glasser %>%
+  #   inner_join(scfc_df, by = "ROI")
+  # 
+  # gldata <- tibble(
+  #   label = roi_glasser$label,
+  #   Estimate = roi_glasser$h_2,
+  # )
+  # ### cortical_position (i.e., how do we want the brain to be positioned)
+  # cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+  # ##### plot the coupling value in brain
+  # min_value <- min(gldata$Estimate, na.rm = TRUE)
+  # quantiles <- quantile(gldata$Estimate, probs = c(0.5), na.rm = TRUE)
+  # max_value <- max(gldata$Estimate, na.rm = TRUE)
+  # plot <- gldata %>%
+  #   ggplot() +
+  #   geom_brain(
+  #     atlas = glasser, 
+  #     position = position_brain(cortical_pos), # side ~ hemi
+  #     # aes(fill = Estimate)) + scale_fill_gradientn(colours = cl, na.value = "#e8e8e8",
+  #     #                                               breaks = c(0),
+  #     #                                               labels = c(paste0("Min: ", round(min_value, 2)), 
+  #     #                                                          paste0("Median: ", round(quantiles[1], 2)),
+  #     #                                                          paste0("Max: ", round(max_value, 2)))
+  #     #                                             ) + ggtitle("Glasser") + 
+  #     aes(fill = Estimate)) + scale_fill_gradientn(colours = cl, #midpoint = 0.05,
+  #                                                   na.value = "#d6d6d6", 
+  #                                                   breaks=c(min_value, quantiles[1], max_value),
+  #                                                   labels=c(round(min_value,2), round(quantiles[1],2), round(max_value,2)),
+  #                                                   limits=c(min_value, max_value)) + ggtitle("Heritability (FDR < 0.05)") +
+  #   theme_bw() + 
+  #   theme(text = element_text(size = 10)) + 
+  #   theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank()) +
+  #   theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm')) + theme(plot.margin=grid::unit(c(0,0,0,0), "mm")) + 
+  #   theme()
+  # 
+  # ggsave(paste0(base_path, "visualization/herit_cortical_harm",harm,"_filtbh.png"), plot = plot, width = 10, height = 8, dpi = 300)
+  # 
+  # #-------------------------------------------plot last 19 ROIs----------------------------------------------------------
+  # ### plot subcortical
+  # #### Get all data
+  # subcor <- mmp_subcor %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>% data.frame()
+  # colnames(subcor) <- c('region','hemi')
+  # subcor <- subcor %>%
+  #   tibble::rownames_to_column(var = "ROI") %>%
+  #   mutate(ROI = paste0("",ROI)) %>%
+  #   slice((n() - 18):n())  # 或者使用 tail(subcor, 19)
+  # 
+  # aseg$data$label
+  # subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+  # subcor$label[19] <- 'Brain-Stem'
+  # subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+  # subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+  # subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+  # 
+  # # Joining roi_glasser with ivw_df to align data
+  # subcor <- subcor %>%
+  #   mutate(ROI = as.integer(ROI)) %>%
+  #   inner_join(scfc_harm_df, by = "ROI")
+  # 
+  # testdata <- tibble(
+  #   label = subcor$label,
+  #   h2 = subcor$h_2
+  # )
+  # plot <- testdata %>%
+  #   #group_by(groups) %>%
+  #   ggplot() +
+  #   geom_brain(atlas = aseg, aes(fill = h2))+
+  #   scale_fill_gradientn(#low = muted("lightgreen"),
+  #                        # # mid = "white",
+  #                        # high = muted("darkgreen"),midpoint = 0, 
+  #                        colours = cl,
+  #                        na.value = "#d6d6d6", 
+  #                        breaks=c(min_value, quantiles[1], max_value),
+  #                                                   labels=c(round(min_value,2), round(quantiles[1],2), round(max_value,2)),
+  #                                                   limits=c(min_value, max_value)) + ggtitle("Heritability (FDR p < 0.05)") + 
+  #   #ggtitle(paste(y_annot[i]))+
+  #   theme_bw() +
+  #   theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+  #   theme(text = element_text(size = 15)) +
+  #   theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm')) + theme(plot.margin=grid::unit(c(0,0,0,0), "mm"))
+  # 
+  # ggsave(paste0(base_path, "visualization/herit_subcortical_harm",harm,"_filtbh.png"), plot = plot, width = 10, height = 8, dpi = 300)
+
+```

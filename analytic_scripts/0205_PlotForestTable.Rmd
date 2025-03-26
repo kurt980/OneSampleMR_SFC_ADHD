@@ -1,0 +1,2481 @@
+---
+title: "0215_DiagVSScore_compare"
+author: "Chengyan Ji"
+date: "2025-02-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+11/04: This is for comparing and summarizing all MR results and association results for sensitivity analysis
+11/04: Need to display no. of SNPs for each method
+01/09: Plot Forrest plot of main MR coefficients
+01/22: Use this to generate table for professor S
+02/14: get bilateral
+02/14: get fancy forest plot with table
+03/22: modify for Windows
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+## Plot ROIs on brain regions
+library(dplyr)
+library(tibble)
+library(dplyr)
+library(AER)
+library(readxl)
+library(ggplot2)
+library(ggseg)
+library(ggsegGlasser)
+library(stringr)
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/" # "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_bfile/"
+cov_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Covariates/"
+harm_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Harmonized_scfc/"
+pheno_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Phenotype/"
+tool_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/Tools/"
+
+directory <- "" #"/Users/kurt/Documents/Data_Science_Project/1018_MR_compare/"
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+
+# read IVReg MR results from PLINK19
+iv_plink19 <- read.csv("iv_results_gwasplink19_qc_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink19_coeff = IV_Coefficient, iv_plink19_p = IV_P_Value, iv_plink19_se = IV_StdError, iv_plink19_stat = IV_Stats, n_snps_plink19 = Num_snps)
+# read IVReg MR results from PLINK20 only sex unrelated
+iv_plink20 <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink20_coeff = IV_Coefficient, iv_plink20_p = IV_P_Value, iv_plink20_se = IV_StdError, iv_plink20_stat = IV_Stats, n_snps_plink20 = Num_snps) %>%
+  mutate(roi = paste0("roi", roi))
+# read IVReg ADHD Binary
+iv_diag <- read.csv("2SRI_results_gwasplink20sexunrel_qc_p=5e-08.csv", header = T) %>% 
+  rename(iv_diag_coeff = IV_Coefficient, iv_diag_p = IV_P_Value, iv_diag_se = IV_StdError, iv_diag_stat = IV_Z, n_snps_diag = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+# read IVReg ADHD no sex
+iv_plink20_nosex <- read.csv("iv_results_gwasplink20_nocov_qc_unrelated_sd_harm2_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink20nosex_coeff = IV_Coefficient, iv_plink20nosex_p = IV_P_Value, iv_plink20nosex_se = IV_StdError, iv_plink20nosex_stat = IV_Stats, n_snps_plink20nosex = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+# read IVReg ADHD on non-combat
+iv_plink20_unharm <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_p=5e-08_intercept.csv", header = T) %>% rename(iv_plink20unharm_coeff = IV_Coefficient, iv_plink20unharm_p = IV_P_Value, iv_plink20unharm_se = IV_StdError, iv_plink20unharm_stat = IV_Stats, n_snps_plink20unharm = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+
+################################################################################################################
+iv_plink19 <- iv_plink19 %>% mutate(iv_plink19_p_bh = p.adjust(iv_plink19_p, method = "BH"))
+iv_plink20 <- iv_plink20 %>% mutate(iv_plink20_p_bh = p.adjust(iv_plink20_p, method = "BH"))
+iv_plink20_nosex <- iv_plink20_nosex %>% mutate(iv_plink20nosex_p_bh = p.adjust(iv_plink20nosex_p, method = "BH"))
+iv_plink20_unharm <- iv_plink20_unharm %>% mutate(iv_plink20unharm_p_bh = p.adjust(iv_plink20unharm_p, method = "BH"))
+iv_diag <- iv_diag %>% mutate(iv_diag_p_bh = p.adjust(iv_diag_p, method = "BH"))
+#在这里#
+
+################################################################################################################
+# ROI Abb
+ROI_df <- mmp_subcor %>% data.frame() %>% 
+  mutate(roi = paste0("roi",row_number()))
+colnames(ROI_df) <- c("ROI", "roi")
+ROI_df$ROI <- gsub("_ROI", "", ROI_df$ROI)
+  
+# ROI names
+#================================================================================
+subcort <- mmp_subcor[361:379]
+roi_subcort <- subcort %>%
+  str_split(., "_", simplify = TRUE) %>%
+  data.frame() %>%
+  mutate(
+    X1 = str_to_title(X1),  # Capitalize the first letter of the first part
+    X2 = str_to_title(X2),  # Capitalize the first letter of the second part
+    Name = paste(X1, X2),   # Reverse the order and combine
+    roi = paste0("roi", row_number() + 360)
+  ) %>%
+  select(roi, Name)  # Keep only relevant columns
+  
+# Read the original dataframe
+roi_cort <- read_excel(paste0(utilities_path, "Glasser_2016_Table_readable.xlsx"), col_names = T)
+# Duplicate and append
+roi_cort <- rbind(roi_cort, roi_cort) 
+roi_cort <- roi_cort %>%
+  mutate(roi_num = 1:nrow(roi_cort)) %>% mutate(roi = paste0("roi", roi_num)) %>% select(roi, roi_num, colnames(roi_cort)[3]) %>% rename(Area = colnames(roi_cort)[3]) %>%
+  mutate(
+    Name = case_when(
+      roi_num <= 180 ~ paste0("Left ", Area),
+      roi_num > 180 ~ paste0("Right ", Area))) %>%
+  select(roi, Name)
+
+roi_df <- rbind(roi_cort, roi_subcort) %>% mutate(Name = if_else(row_number() == n(), "Brainstem", Name))
+#================================================================================
+
+# Path to network information
+network_file_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/CAB-NP_v1.1_Labels-ReorderedbyNetworks.xlsx"
+network_sheet_name <- "wGSR_LabelKey"
+network_data <- read_excel(network_file_path, sheet = network_sheet_name) %>%
+  slice(1:360) %>% 
+  mutate(Row_Number = row_number()) %>% 
+  mutate(roi = paste0("roi", Row_Number))
+
+################################################################################################################
+## all MR
+all_mr <- (iv_plink20 %>% select(roi, iv_plink20_coeff, iv_plink20_p, iv_plink20_p_bh, iv_plink20_se, iv_plink20_stat, n_snps_plink20)) %>%
+  inner_join((iv_plink19 %>% select(roi, iv_plink19_coeff, iv_plink19_p, iv_plink19_p_bh, iv_plink19_se, iv_plink19_stat, n_snps_plink19)), by = "roi") %>%
+  inner_join((iv_plink20_nosex %>% select(roi, iv_plink20nosex_coeff, iv_plink20nosex_p, iv_plink20nosex_p_bh, iv_plink20nosex_se, iv_plink20nosex_stat, n_snps_plink20nosex)), by = "roi") %>%
+  inner_join((iv_plink20_unharm %>% select(roi, iv_plink20unharm_coeff, iv_plink20unharm_p, iv_plink20unharm_p_bh, iv_plink20unharm_se, iv_plink20unharm_stat, n_snps_plink20unharm))) %>%
+  inner_join((iv_diag %>% select(roi, iv_diag_coeff, iv_diag_p, iv_diag_p_bh, iv_diag_se, iv_diag_stat, n_snps_diag))) %>%
+  mutate(across(-roi, as.numeric)) %>%
+  left_join(network_data, by = "roi") %>%
+  left_join(roi_df, by = "roi") %>%
+  left_join(ROI_df, by = "roi") %>%
+  mutate(NETWORK = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Visual1" ~ "VIS1",
+    NETWORK == "Posterior-Multimodal" ~ "PMN",
+    NETWORK == "Orbito-Affective" ~ "OAN",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Ventral-Multimodal" ~ "VMN",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  )) %>%
+  mutate(Network = NETWORK) %>%
+  arrange(NETWORK)
+
+# LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+all_mr <- all_mr %>%
+  filter(
+    iv_plink20_p_bh < 10.05,
+    roi != "roi379"
+  ) %>%
+  mutate(Network = ifelse(is.na(Network), "SUBC", Network))
+```
+
+```{r}
+#####
+## 0122: Do a data for prof Stef
+table <- iv_plink20 %>% select(Name, HEMISPHERE, Network, iv_plink20_coeff, iv_plink20_se, iv_plink20_p_bh, n_snps_plink20, IV_N) %>%
+  rename(Hemisphere = HEMISPHERE, Sample_size = IV_N, MR_Coefficient = iv_plink20_coeff, PValue_corrected = iv_plink20_p_bh, StandardError = iv_plink20_se, N_SNPs = n_snps_plink20) %>%
+  mutate(`Effect on ADHD` = ifelse(MR_Coefficient > 0, "Positive", "Negative")) %>%
+  select(Name, Hemisphere, Network, `Effect on ADHD`, MR_Coefficient, PValue_corrected, StandardError, N_SNPs, Sample_size)
+
+write.csv(table, "summary_table.csv", row.names = F)
+####
+```
+
+
+
+
+## FOREST PLOTS TABLE
+### 0. All ROIs in main
+```{r}
+library(dplyr)
+library(tidyr)
+
+# # LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+# all_mr <- all_mr %>%
+#   filter(
+#     ROI %in%
+#       c("L_TE1p", "L_2", "L_6r", "R_8Av", "R_PGi", "R_STSdp", "R_STSvp", "amygdala_left", "diencephalon_left")
+#   ) %>%
+#   mutate(HEMISPHERE = ifelse(is.na(HEMISPHERE), "L", HEMISPHERE))
+#   
+
+# Function to format p-values in scientific notation with 2 decimal places
+format_pval_sci <- function(pval) {
+  if (!is.na(pval)) {
+    return(formatC(pval, format = "e", digits = 2))  # Convert to scientific notation with 2 decimal places
+  } else {
+    return(NA)
+  }
+}
+
+forest_data <- all_mr %>%
+  filter(iv_plink20_p_bh < 0.05) %>%
+  select(roi, Network, ROI, Name, 
+         iv_plink20_coeff, iv_plink20_se, iv_plink20_stat, iv_plink20_p, iv_plink20_p_bh,
+         iv_plink19_coeff, iv_plink19_se, iv_plink19_stat, iv_plink19_p, iv_plink19_p_bh, 
+         iv_plink20nosex_coeff, iv_plink20nosex_se, iv_plink20nosex_stat, iv_plink20nosex_p, iv_plink20nosex_p_bh,
+         iv_plink20unharm_coeff, iv_plink20unharm_se, iv_plink20unharm_stat, iv_plink20unharm_p, iv_plink20unharm_p_bh,
+         iv_diag_coeff, iv_diag_se, iv_diag_stat, iv_diag_p, iv_diag_p_bh) %>%
+
+  # Pivot longer for multiple methods (coefficients, SEs, p-values, p_bh)
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_([^_]*)_(.*)"  # Extract method and value type
+  ) %>%
+
+  # Rename columns for clarity
+  rename(
+    Coefficient = coeff,
+    SE = se,
+    Statistics = stat,
+    Pvalue = p,
+    Pvalue_bh = p_bh
+  ) 
+
+# Extract SNP counts and reshape into long format
+n_snps_data <- all_mr %>%
+  select(roi, 
+         n_snps_plink20, n_snps_plink19, n_snps_plink20nosex, 
+         n_snps_plink20unharm, n_snps_diag) %>%
+
+  # Pivot longer for multiple methods (SNP counts)
+  pivot_longer(cols = starts_with("n_snps_"),
+               names_to = "Method",
+               names_prefix = "n_snps_",
+               values_to = "IVs")
+
+forest_data <- forest_data %>% inner_join(n_snps_data, by = c("roi", "Method")) %>%
+  select(roi, ROI, Name, Network, Method, IVs, Coefficient, SE, Statistics, Pvalue, Pvalue_bh)
+
+forest_data <- forest_data %>%
+  # Apply scientific notation formatting to p-values
+  mutate(
+    Pvalue_bh_sci = sapply(Pvalue_bh, format_pval_sci),
+    Lower_CI = Coefficient - 1.96 * SE,  # Compute 95% CI lower bound
+    Upper_CI = Coefficient + 1.96 * SE,  # Compute 95% CI upper bound
+    Forest_Plot = paste0(
+      format(round(Coefficient, 2), nsmall = 2), " (", 
+      format(round(Lower_CI, 2), nsmall = 2), ", ", 
+      format(round(Upper_CI, 2), nsmall = 2), ")"
+    )) %>%
+  mutate(Statistics = formatC(Statistics, format = "f", digits = 3)) %>%
+  mutate(Method = case_when(
+    Method == "plink20" ~ "MR",
+    Method == "plink19" ~ "2SLS (1)",
+    Method == "plink20nosex" ~ "2SLS (2)",
+    Method == "plink20unharm" ~ "2SLS (3)",
+    Method == "diag" ~ "2SRI (Binary)",
+    TRUE ~ Method
+  )) # Remove grouping to avoid issues in further processing
+
+```
+
+```{r}
+forest_data_whole <- forest_data %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Format text for forest plot column
+write.csv(forest_data_whole, "all_46ROIs_summary.csv")
+
+####################################################################################################################################
+# Plot whole plot
+
+png(filename = "forest_table_plot_allROIs_sigmain.png", width = 24*1.25, height = 96*1, units = "in", res = 350)
+
+num_rows <- nrow(forest_data_whole)
+row_seq <- seq(num_rows * 2, 2, by = -2)
+
+par(mai = c(0, 0, 0, 0))  # Reduce bottom margin to lift x-axis
+
+# Set plot area
+plot(forest_data_whole$Coefficient, row_seq, pch = 15, 
+     xlim = c(-21.5, 18.5),
+     ylim = c(0, num_rows * 2 + 1.8), 
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Background zebra striping
+for (i in seq(1, length(row_seq), by = 5)) {
+  rect(-23, row_seq[i] - 0.75, 20, row_seq[i] + 0.95, col = "gray95", border = NA)
+}
+
+# # Outer border
+# rect(-13, 0, 12.5, num_rows * 2 + 5, border = "darkblue", lwd = 3)
+
+# Axis
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -19)
+
+# Reference vertical line
+segments(0, 1, 0, num_rows * 2 + 1, lty = 1, col = "black")
+
+# # Horizontal separators
+# for (pos in unique(row_seq[!duplicated(forest_data_whole$ROI)][-2])) {
+#   segments(-13, pos + 1, 12.5, pos + 1, col = "darkgray", lty = 2, lwd = 1.5)
+# }
+
+# Header (with color)
+header_color <- "darkblue"
+text(-22.25, num_rows * 2 + 2.8, "ROI", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-16.5, num_rows * 2 + 2.8, "Network", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-12, num_rows * 2 + 2.8, "Method", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-5.5, num_rows * 2 + 2.8, "IVs", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(4.5, num_rows * 2 + 2.8, "Coefficient\n(95% CI)", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(10.5, num_rows * 2 + 2.8, "t statistics\n(z for binary)", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(16.5, num_rows * 2 + 2.8, "FDR P", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+
+# Points and error bars with color coding
+point_colors <- ifelse(forest_data_whole$Coefficient > 0, "firebrick", "darkblue")
+points(forest_data_whole$Coefficient, row_seq, pch = 15, col = point_colors, cex = 1.8)
+
+segments(forest_data_whole$Lower_CI, row_seq, forest_data_whole$Upper_CI, row_seq, col = point_colors)
+
+# Content table
+text(-22.5, row_seq, forest_data_whole$ROI, cex = 2.75, pos = 4)
+text(-16, row_seq, forest_data_whole$Network, cex = 2.75, pos = 4)
+text(-12, row_seq, forest_data_whole$Method, cex = 2.75, pos = 4)
+text(-5.5, row_seq, forest_data_whole$IVs, cex = 2.75, pos = 4)
+text(3.5, row_seq, forest_data_whole$Forest_Plot, cex = 2.5, pos = 4)
+text(11.5, row_seq, format(forest_data_whole$Statistics, digits = 3), cex = 2.5, pos = 4)
+text(16.5, row_seq, forest_data_whole$Pvalue_bh_sci, cex = 2.5, pos = 4)
+
+dev.off()
+
+```
+
+Plot part by part
+
+```{r}
+# 1) Subset data by network groups
+df1 <- forest_data[forest_data$Network %in% c("DMN", "AUD"), ] %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Format text for forest plot column
+
+df2 <- forest_data[forest_data$Network %in% c("CON", "LANG"), ] %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Format text for forest plot column
+
+df3 <- forest_data[forest_data$Network %in% c("DAN", "FPN", "SUBC"), ] %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Format text for forest plot column
+
+df4 <- forest_data[forest_data$Network %in% c("SMN", "VIS2"), ] %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Format text for forest plot column
+
+################################################################################
+plot_forest_chunk <- function(forest_data_chunk, page_index) {
+  
+  # Derive the row sequence just for this chunk
+  # (Each ROI in your data seems to take 5 rows or so, but here
+  #  you mentioned 2 rows per ROI. We'll keep your original logic
+  #  and simply apply it to the chunk.)
+  num_rows <- nrow(forest_data_chunk)
+  row_seq <- seq(num_rows * 2, 2, by = -2)
+  
+  # Construct a filename that indicates the chunk/page
+  outfile <- paste0("forest_table_plot_allROIs_sigmain_page", page_index, ".png")
+  
+  # Create a PNG device (same size as your original code)
+  if (num_rows < 10) {
+    png(filename = outfile, width = 24*1.25, height = 22, units = "in", res = 350)
+  } else {
+    png(filename = outfile, width = 24*1.25, height = (96*1.25*num_rows)/230+5, units = "in", res = 350)
+  }
+  
+  # Adjust margins if needed
+  par(mai = c(0, 0, 0, 0))
+
+  if (num_rows < 70) {
+    # Main plot
+    plot(forest_data_chunk$Coefficient, row_seq, pch = 15,
+         xlim = c(-21.5, 18.5),
+         ylim = c(0, num_rows * 2 + 3),
+         xlab = '', ylab = '', yaxt = 'n', xaxt = 'n',
+         bty = 'n')
+  } else {
+    # Main plot
+    plot(forest_data_chunk$Coefficient, row_seq, pch = 15,
+         xlim = c(-21.5, 18.5),
+         ylim = c(0, num_rows * 2 + 1.8),
+         xlab = '', ylab = '', yaxt = 'n', xaxt = 'n',
+         bty = 'n')
+  }
+  
+  # Background zebra striping
+  for (i in seq(1, length(row_seq), by = 5)) {
+    rect(-23, row_seq[i] - 0.75, 20, row_seq[i] + 0.95, col = "gray95", border = NA)
+  }
+  
+  # Axis
+  if (num_rows < 10) {
+    axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -(7*num_rows/70)-5)
+  } else {
+    axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -(7*num_rows/70)-2.5)
+  }
+  
+  # Vertical reference line
+  segments(0, 1, 0, num_rows * 2 + 1, lty = 1, col = "black")
+  
+  # Header text
+  header_color <- "darkblue"
+  text(-22.25, num_rows * 2 + 2.8, "ROI", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(-16.5,  num_rows * 2 + 2.8, "Network", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(-12,    num_rows * 2 + 2.8, "Method", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(-5.5,   num_rows * 2 + 2.8, "IVs", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(6.5,    num_rows * 2 + 2.8, "Coefficient\n(95% CI)", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(12,   num_rows * 2 + 2.8, "t statistics\n(z for binary)", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  text(16.5,   num_rows * 2 + 2.8, "FDR P", cex = 3.0, font = 2, family = "Times", pos = 4, col = header_color)
+  
+  # Points and error bars
+  point_colors <- ifelse(forest_data_chunk$Coefficient > 0, "firebrick", "darkblue")
+  points(forest_data_chunk$Coefficient, row_seq, pch = 15, col = point_colors, cex = 1.8)
+  segments(forest_data_chunk$Lower_CI, row_seq, forest_data_chunk$Upper_CI, row_seq, col = point_colors)
+  
+  # Table text
+  text(-22.5, row_seq, forest_data_chunk$ROI, cex = 2.75, pos = 4)
+  text(-16,   row_seq, forest_data_chunk$Network, cex = 2.75, pos = 4)
+  text(-12,   row_seq, forest_data_chunk$Method, cex = 2.75, pos = 4)
+  text(-5.5,  row_seq, forest_data_chunk$IVs, cex = 2.75, pos = 4)
+  text(5.5,   row_seq, forest_data_chunk$Forest_Plot, cex = 2.5, pos = 4)
+  text(13,  row_seq, format(forest_data_chunk$Statistics, digits = 3), cex = 2.5, pos = 4)
+  text(16.5,  row_seq, forest_data_chunk$Pvalue_bh_sci, cex = 2.5, pos = 4)
+  
+  dev.off()
+  
+  message(paste("Saved:", outfile, "covering rows", num_rows, "entries."))
+}
+
+# 2) Plot each subset (page) using the same function
+plot_forest_chunk(df1, page_index = 1)
+plot_forest_chunk(df2, page_index = 2)
+plot_forest_chunk(df3, page_index = 3)
+plot_forest_chunk(df4, page_index = 4)
+
+# # We'll create a sequence 1, 71, 141, 211, ... up to nrow(forest_data)
+# chunk_indices <- seq(1, nrow(forest_data), by = 70)
+# 
+# for (i in seq_along(chunk_indices)) {
+#   start_idx <- chunk_indices[i]
+#   end_idx <- min(start_idx + 70 - 1, nrow(forest_data))
+#   
+#   # Subset the data for this chunk
+#   forest_data_chunk <- forest_data[start_idx:end_idx, ]
+#   
+#   # Call our plotting function for this chunk
+#   plot_forest_chunk(forest_data_chunk, page_index = i)
+# }
+
+```
+
+### 1. selected ROI
+```{r}
+library(dplyr)
+library(tidyr)
+
+# LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+all_mr <- all_mr %>%
+  filter(
+    ROI %in%
+      c("L_TE1p", "L_2", "L_6r", "R_8Av", "R_PGi", "R_STSdp", "R_STSvp", "amygdala_left", "diencephalon_left")
+  ) %>%
+  mutate(HEMISPHERE = ifelse(is.na(HEMISPHERE), "L", HEMISPHERE))
+  
+
+# Function to format p-values in scientific notation with 2 decimal places
+format_pval_sci <- function(pval) {
+  if (!is.na(pval)) {
+    return(formatC(pval, format = "e", digits = 2))  # Convert to scientific notation with 2 decimal places
+  } else {
+    return(NA)
+  }
+}
+
+forest_data <- all_mr %>%
+  filter(iv_plink20_p_bh < 0.05) %>%
+  select(roi, Network, ROI, Name, 
+         iv_plink20_coeff, iv_plink20_se, iv_plink20_stat, iv_plink20_p, iv_plink20_p_bh,
+         iv_plink19_coeff, iv_plink19_se, iv_plink19_stat, iv_plink19_p, iv_plink19_p_bh, 
+         iv_plink20nosex_coeff, iv_plink20nosex_se, iv_plink20nosex_stat, iv_plink20nosex_p, iv_plink20nosex_p_bh,
+         iv_plink20unharm_coeff, iv_plink20unharm_se, iv_plink20unharm_stat, iv_plink20unharm_p, iv_plink20unharm_p_bh,
+         iv_diag_coeff, iv_diag_se, iv_diag_stat, iv_diag_p, iv_diag_p_bh) %>%
+
+  # Pivot longer for multiple methods (coefficients, SEs, p-values, p_bh)
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_([^_]*)_(.*)"  # Extract method and value type
+  ) %>%
+
+  # Rename columns for clarity
+  rename(
+    Coefficient = coeff,
+    SE = se,
+    Statistics = stat,
+    Pvalue = p,
+    Pvalue_bh = p_bh
+  ) 
+
+# Extract SNP counts and reshape into long format
+n_snps_data <- all_mr %>%
+  select(roi, 
+         n_snps_plink20, n_snps_plink19, n_snps_plink20nosex, 
+         n_snps_plink20unharm, n_snps_diag) %>%
+
+  # Pivot longer for multiple methods (SNP counts)
+  pivot_longer(cols = starts_with("n_snps_"),
+               names_to = "Method",
+               names_prefix = "n_snps_",
+               values_to = "IVs")
+
+forest_data <- forest_data %>% inner_join(n_snps_data, by = c("roi", "Method")) %>%
+  select(roi, ROI, Name, Network, Method, IVs, Coefficient, SE, Statistics, Pvalue, Pvalue_bh)
+
+forest_data <- forest_data %>%
+  # Apply scientific notation formatting to p-values
+  mutate(
+    Pvalue_bh_sci = sapply(Pvalue_bh, format_pval_sci),
+    Lower_CI = Coefficient - 1.96 * SE,  # Compute 95% CI lower bound
+    Upper_CI = Coefficient + 1.96 * SE,  # Compute 95% CI upper bound
+    Forest_Plot = paste0(
+      format(round(Coefficient, 2), nsmall = 2), " (", 
+      format(round(Lower_CI, 2), nsmall = 2), ", ", 
+      format(round(Upper_CI, 2), nsmall = 2), ")"
+    )) %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup() %>%  # Format text for forest plot column
+  mutate(Statistics = formatC(Statistics, format = "f", digits = 3)) %>%
+  mutate(Method = case_when(
+    Method == "plink20" ~ "MR",
+    Method == "plink19" ~ "2SLS (1)",
+    Method == "plink20nosex" ~ "2SLS (2)",
+    Method == "plink20unharm" ~ "2SLS (3)",
+    Method == "diag" ~ "2SRI (Binary)",
+    TRUE ~ Method
+  )) # Remove grouping to avoid issues in further processing
+```
+
+漂亮版本的
+
+```{r}
+png(filename = "forest_table_plot_selectedROIs.png", width = 24*1.25, height = 22*1.25*(46/9)*(9/46), units = "in", res = 300)
+
+num_rows <- nrow(forest_data)
+row_seq <- seq(num_rows * 2, 2, by = -2)
+
+par(mai = c(0, 0, 0, 0))  # Reduce bottom margin to lift x-axis
+
+# Set plot area
+plot(forest_data$Coefficient, row_seq, pch = 15, 
+     xlim = c(-21.5, 18.5),
+     ylim = c(0, num_rows * 2 + 1.8), 
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Background zebra striping
+for (i in seq(1, length(row_seq), by = 5)) {
+  rect(-23, row_seq[i] - 0.75, 20, row_seq[i] + 0.95, col = "gray95", border = NA)
+}
+
+# # Outer border
+# rect(-13, 0, 12.5, num_rows * 2 + 5, border = "darkblue", lwd = 3)
+
+# Axis
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -7)
+
+# Reference vertical line
+segments(0, 1, 0, num_rows * 2 + 1, lty = 1, col = "black")
+
+# # Horizontal separators
+# for (pos in unique(row_seq[!duplicated(forest_data$ROI)][-2])) {
+#   segments(-13, pos + 1, 12.5, pos + 1, col = "darkgray", lty = 2, lwd = 1.5)
+# }
+
+# Header (with color)
+header_color <- "darkblue"
+text(-22.25, num_rows * 2 + 2.8, "ROI", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-16.5, num_rows * 2 + 2.8, "Network", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-12, num_rows * 2 + 2.8, "Method", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-5.5, num_rows * 2 + 2.8, "IVs", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(4.5, num_rows * 2 + 2.8, "Coefficient\n(95% CI)", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(10.5, num_rows * 2 + 2.8, "t statistics\n(z for binary)", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(16.5, num_rows * 2 + 2.8, "FDR P", cex = 3.0, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+
+# Points and error bars with color coding
+point_colors <- ifelse(forest_data$Coefficient > 0, "firebrick", "darkblue")
+points(forest_data$Coefficient, row_seq, pch = 15, col = point_colors, cex = 1.8)
+
+segments(forest_data$Lower_CI, row_seq, forest_data$Upper_CI, row_seq, col = point_colors)
+
+# Content table
+text(-22.5, row_seq, forest_data$ROI, cex = 2.75, pos = 4)
+text(-16, row_seq, forest_data$Network, cex = 2.75, pos = 4)
+text(-12, row_seq, forest_data$Method, cex = 2.75, pos = 4)
+text(-5.5, row_seq, forest_data$IVs, cex = 2.75, pos = 4)
+text(3.5, row_seq, forest_data$Forest_Plot, cex = 2.5, pos = 4)
+text(11.5, row_seq, format(forest_data$Statistics, digits = 3), cex = 2.5, pos = 4)
+text(16.5, row_seq, forest_data$Pvalue_bh_sci, cex = 2.5, pos = 4)
+
+dev.off()
+
+```
+
+朴素版本的
+
+```{r}
+# Save the plot as a PNG file
+png(filename = "forest_table_plot_allsig_selectedROIs.png", width = 25.5, height = 25, units = "in", res = 300)
+
+# Define plotting parameters
+num_rows <- nrow(forest_data)
+row_seq <- seq(num_rows * 2, 2, by = -2)  # Increased spacing
+par(mai = c(0.0, 0.1, 0, 0.5))  # Adjust margins
+
+# Find unique ROI positions (start of each ROI group)
+unique_roi_positions <- row_seq[!duplicated(forest_data$ROI)][-2]
+
+# Set plot area
+plot(forest_data$Coefficient, row_seq, pch = 15, 
+     xlim = c(-13, 12.5),
+     ylim = c(0, num_rows * 2 + 5),  # Increased ylim
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Add x-axis for coefficients
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -4)  # Larger x-axis labels
+
+# Add reference vertical line at zero
+segments(0, -1, 0, num_rows * 2 + 2, lty = 3, col = "red")
+
+# Add confidence intervals as horizontal error bars
+segments(forest_data$Lower_CI, row_seq, 
+         forest_data$Upper_CI, row_seq, col = "black")
+
+# **Add horizontal separator lines for each ROI**
+for (pos in unique_roi_positions) {
+  segments(-13, pos + 1, 12.5, pos + 1, col = "gray50", lty = 2, lwd = 1.2)  # Dashed gray lines
+}
+
+# Add column titles (with larger text)
+text(-13, num_rows * 2 + 5, "ROI", cex = 2.4, font = 2, pos = 4)
+text(-11.5, num_rows * 2 + 5, "Network", cex = 2.4, font = 2, pos = 4)
+text(-9, num_rows * 2 + 5, "Method", cex = 2.4, font = 2, pos = 4)
+text(-5, num_rows * 2 + 5, "IVs", cex = 2.4, font = 2, pos = 4)
+text(3.5, num_rows * 2 + 5, "Coefficient\n(95% CI)", cex = 2.4, font = 2, pos = 4)
+
+text(7, num_rows * 2 + 5, "t statistics\n(z for binary)", cex = 2.4, font = 2, pos = 4)
+text(9.9, num_rows * 2 + 5, "FDR P", cex = 2.4, font = 2, pos = 4)
+
+# Fill in the table with ROI details (with larger text)
+text(-13, row_seq, forest_data$ROI, cex = 2.1, pos = 4)
+text(-11, row_seq, forest_data$Network, cex = 2.1, pos = 4)
+text(-9, row_seq, forest_data$Method, cex = 2.1, pos = 4)
+text(-5, row_seq, forest_data$IVs, cex = 2.1, pos = 4)
+text(3.5, row_seq, forest_data$Forest_Plot, cex = 2.1, pos = 4)
+
+# Use formatted scientific notation for P-values
+text(7.5, row_seq, format(forest_data$Statistics, digits = 3), cex = 2.1, pos = 4)
+text(9.9, row_seq, forest_data$Pvalue_bh_sci, cex = 2.1, pos = 4)
+
+# Finish saving the image
+dev.off()
+```
+
+
+### 2. ##########For ROI pairs######################################################################################################################
+```{r, echo=F, message=FALSE, warning=FALSE}
+## Plot ROIs on brain regions
+library(dplyr)
+library(tibble)
+library(dplyr)
+library(AER)
+library(readxl)
+library(ggplot2)
+library(ggseg)
+library(ggsegGlasser)
+library(stringr)
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/" # "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_bfile/"
+cov_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Covariates/"
+harm_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Harmonized_scfc/"
+pheno_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/Phenotype/"
+tool_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/Tools/"
+
+directory <- "" #"/Users/kurt/Documents/Data_Science_Project/1018_MR_compare/"
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+
+# read IVReg MR results from PLINK19
+iv_plink19 <- read.csv("iv_results_gwasplink19_qc_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink19_coeff = IV_Coefficient, iv_plink19_p = IV_P_Value, iv_plink19_se = IV_StdError, iv_plink19_stat = IV_Stats, n_snps_plink19 = Num_snps)
+# read IVReg MR results from PLINK20 only sex unrelated
+iv_plink20 <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_harm2_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink20_coeff = IV_Coefficient, iv_plink20_p = IV_P_Value, iv_plink20_se = IV_StdError, iv_plink20_stat = IV_Stats, n_snps_plink20 = Num_snps) %>%
+  mutate(roi = paste0("roi", roi))
+# read IVReg ADHD Binary
+iv_diag <- read.csv("2SRI_results_gwasplink20sexunrel_qc_p=5e-08.csv", header = T) %>% 
+  rename(iv_diag_coeff = IV_Coefficient, iv_diag_p = IV_P_Value, iv_diag_se = IV_StdError, iv_diag_stat = IV_Z, n_snps_diag = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+# read IVReg ADHD no sex
+iv_plink20_nosex <- read.csv("iv_results_gwasplink20_nocov_qc_unrelated_sd_harm2_p=5e-08_intercept.csv", header = T) %>% 
+  rename(iv_plink20nosex_coeff = IV_Coefficient, iv_plink20nosex_p = IV_P_Value, iv_plink20nosex_se = IV_StdError, iv_plink20nosex_stat = IV_Stats, n_snps_plink20nosex = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+# read IVReg ADHD on non-combat
+iv_plink20_unharm <- read.csv("iv_results_gwasplink20_covsex_qc_unrelated_sd_p=5e-08_intercept.csv", header = T) %>% rename(iv_plink20unharm_coeff = IV_Coefficient, iv_plink20unharm_p = IV_P_Value, iv_plink20unharm_se = IV_StdError, iv_plink20unharm_stat = IV_Stats, n_snps_plink20unharm = Num_snps) %>%
+  mutate(roi = paste0("roi",roi))
+
+################################################################################################################
+iv_plink19 <- iv_plink19 %>% mutate(iv_plink19_p_bh = p.adjust(iv_plink19_p, method = "BH"))
+iv_plink20 <- iv_plink20 %>% mutate(iv_plink20_p_bh = p.adjust(iv_plink20_p, method = "BH"))
+iv_plink20_nosex <- iv_plink20_nosex %>% mutate(iv_plink20nosex_p_bh = p.adjust(iv_plink20nosex_p, method = "BH"))
+iv_plink20_unharm <- iv_plink20_unharm %>% mutate(iv_plink20unharm_p_bh = p.adjust(iv_plink20unharm_p, method = "BH"))
+iv_diag <- iv_diag %>% mutate(iv_diag_p_bh = p.adjust(iv_diag_p, method = "BH"))
+#在这里#
+
+################################################################################################################
+# ROI Abb
+ROI_df <- mmp_subcor %>% data.frame() %>% 
+  mutate(roi = paste0("roi",row_number()))
+colnames(ROI_df) <- c("ROI", "roi")
+ROI_df$ROI <- gsub("_ROI", "", ROI_df$ROI)
+  
+# ROI names
+#================================================================================
+subcort <- mmp_subcor[361:379]
+roi_subcort <- subcort %>%
+  str_split(., "_", simplify = TRUE) %>%
+  data.frame() %>%
+  mutate(
+    X1 = str_to_title(X1),  # Capitalize the first letter of the first part
+    X2 = str_to_title(X2),  # Capitalize the first letter of the second part
+    Name = paste(X1, X2),   # Reverse the order and combine
+    roi = paste0("roi", row_number() + 360)
+  ) %>%
+  select(roi, Name)  # Keep only relevant columns
+  
+# Read the original dataframe
+roi_cort <- read_excel(paste0(utilities_path, "Glasser_2016_Table_readable.xlsx"), col_names = T)
+# Duplicate and append
+roi_cort <- rbind(roi_cort, roi_cort) 
+roi_cort <- roi_cort %>%
+  mutate(roi_num = 1:nrow(roi_cort)) %>% mutate(roi = paste0("roi", roi_num)) %>% select(roi, roi_num, colnames(roi_cort)[3]) %>% rename(Area = colnames(roi_cort)[3]) %>%
+  mutate(
+    Name = case_when(
+      roi_num <= 180 ~ paste0("Left ", Area),
+      roi_num > 180 ~ paste0("Right ", Area))) %>%
+  select(roi, Name)
+
+roi_df <- rbind(roi_cort, roi_subcort) %>% mutate(Name = if_else(row_number() == n(), "Brainstem", Name))
+#================================================================================
+
+# Path to network information
+network_file_path <- "C:/Users/KurtJi/OneDrive - University of Illinois - Urbana/Desktop/UVA/DS_project/ABCD_data/ABCD_SCFC_utilities/CAB-NP_v1.1_Labels-ReorderedbyNetworks.xlsx"
+network_sheet_name <- "wGSR_LabelKey"
+network_data <- read_excel(network_file_path, sheet = network_sheet_name) %>%
+  slice(1:360) %>% 
+  mutate(Row_Number = row_number()) %>% 
+  mutate(roi = paste0("roi", Row_Number))
+
+################################################################################################################
+## all MR pairs
+all_mr_pair <- (iv_plink20 %>% select(roi, iv_plink20_coeff, iv_plink20_p, iv_plink20_p_bh, iv_plink20_se, iv_plink20_stat, n_snps_plink20)) %>%
+  inner_join((iv_plink19 %>% select(roi, iv_plink19_coeff, iv_plink19_p, iv_plink19_p_bh, iv_plink19_se, iv_plink19_stat, n_snps_plink19)), by = "roi") %>%
+  inner_join((iv_plink20_nosex %>% select(roi, iv_plink20nosex_coeff, iv_plink20nosex_p, iv_plink20nosex_p_bh, iv_plink20nosex_se, iv_plink20nosex_stat, n_snps_plink20nosex)), by = "roi") %>%
+  inner_join((iv_plink20_unharm %>% select(roi, iv_plink20unharm_coeff, iv_plink20unharm_p, iv_plink20unharm_p_bh, iv_plink20unharm_se, iv_plink20unharm_stat, n_snps_plink20unharm))) %>%
+  inner_join((iv_diag %>% select(roi, iv_diag_coeff, iv_diag_p, iv_diag_p_bh, iv_diag_se, iv_diag_stat, n_snps_diag))) %>%
+  mutate(across(-roi, as.numeric)) %>%
+  left_join(network_data, by = "roi") %>%
+  left_join(roi_df, by = "roi") %>%
+  left_join(ROI_df, by = "roi") %>%
+  mutate(NETWORK = case_when(
+    NETWORK == "Default" ~ "DMN",
+    NETWORK == "Cingulo-Opercular" ~ "CON",
+    NETWORK == "Dorsal-Attention" ~ "DAN",
+    NETWORK == "Somatomotor" ~ "SMN",
+    NETWORK == "Language" ~ "LANG",
+    NETWORK == "Visual2" ~ "VIS2",
+    NETWORK == "Visual1" ~ "VIS1",
+    NETWORK == "Posterior-Multimodal" ~ "PMN",
+    NETWORK == "Orbito-Affective" ~ "OAN",
+    NETWORK == "Frontoparietal" ~ "FPN",
+    NETWORK == "Subcortical" ~ "SUBC",
+    NETWORK == "Ventral-Multimodal" ~ "VMN",
+    NETWORK == "Auditory" ~ "AUD",
+    TRUE ~ NETWORK
+  )) %>%
+  mutate(Network = NETWORK)
+
+# LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+all_mr_pair <- all_mr_pair %>%
+  filter(
+      iv_plink20_p_bh < 0.05
+  ) %>%
+  mutate(Network = ifelse(is.na(Network), "SUBC", Network))
+```
+
+### 3. For 3 networks
+```{r}
+library(dplyr)
+library(tidyr)
+
+# LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+all_mr <- all_mr %>%
+  filter(iv_plink20_p_bh < 0.05 #&
+  #     iv_plink19_p_bh < 0.05 &
+  #     iv_plink20nosex_p_bh < 0.05 #&
+  #     #iv_plink20unharm_p_bh < 0.05
+  ) %>%
+  filter(
+    Network %in%
+      c("DAN", "SMN", "LANG")
+  ) %>%
+  mutate(HEMISPHERE = ifelse(is.na(HEMISPHERE), "L", HEMISPHERE)) #%>%
+  # filter(
+  #  ! ROI %in% c("L_TPOJ1", "R_TPOJ1", "L_1", "R_1", "R_6mp", "L_6mp", "L_PFt", "R_PFt", "L_LIPd", "R_LIPd")
+  # )
+  
+
+# Function to format p-values in scientific notation with 2 decimal places
+format_pval_sci <- function(pval) {
+  if (!is.na(pval)) {
+    return(formatC(pval, format = "e", digits = 2))  # Convert to scientific notation with 2 decimal places
+  } else {
+    return(NA)
+  }
+}
+
+forest_data <- all_mr %>%
+  filter(iv_plink20_p_bh < 0.05) %>%
+  select(roi, Network, ROI, Name, 
+         iv_plink20_coeff, iv_plink20_se, iv_plink20_stat, iv_plink20_p, iv_plink20_p_bh,
+         iv_plink19_coeff, iv_plink19_se, iv_plink19_stat, iv_plink19_p, iv_plink19_p_bh, 
+         iv_plink20nosex_coeff, iv_plink20nosex_se, iv_plink20nosex_stat, iv_plink20nosex_p, iv_plink20nosex_p_bh,
+         iv_plink20unharm_coeff, iv_plink20unharm_se, iv_plink20unharm_stat, iv_plink20unharm_p, iv_plink20unharm_p_bh,
+         iv_diag_coeff, iv_diag_se, iv_diag_stat, iv_diag_p, iv_diag_p_bh) %>%
+
+  # Pivot longer for multiple methods (coefficients, SEs, p-values, p_bh)
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_([^_]*)_(.*)"  # Extract method and value type
+  ) %>%
+
+  # Rename columns for clarity
+  rename(
+    Coefficient = coeff,
+    SE = se,
+    Statistics = stat,
+    Pvalue = p,
+    Pvalue_bh = p_bh
+  ) 
+
+# Extract SNP counts and reshape into long format
+n_snps_data <- all_mr %>%
+  select(roi, 
+         n_snps_plink20, n_snps_plink19, n_snps_plink20nosex, 
+         n_snps_plink20unharm, n_snps_diag) %>%
+
+  # Pivot longer for multiple methods (SNP counts)
+  pivot_longer(cols = starts_with("n_snps_"),
+               names_to = "Method",
+               names_prefix = "n_snps_",
+               values_to = "IVs")
+
+forest_data <- forest_data %>% inner_join(n_snps_data, by = c("roi", "Method")) %>%
+  select(roi, ROI, Name, Network, Method, IVs, Coefficient, SE, Statistics, Pvalue, Pvalue_bh)
+
+forest_data <- forest_data %>%
+  # Apply scientific notation formatting to p-values
+  mutate(
+    Pvalue_bh_sci = sapply(Pvalue_bh, format_pval_sci),
+    Lower_CI = Coefficient - 1.96 * SE,  # Compute 95% CI lower bound
+    Upper_CI = Coefficient + 1.96 * SE,  # Compute 95% CI upper bound
+    Forest_Plot = paste0(
+      format(round(Coefficient, 2), nsmall = 2), " (", 
+      format(round(Lower_CI, 2), nsmall = 2), ", ", 
+      format(round(Upper_CI, 2), nsmall = 2), ")"
+    )) %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup() %>%  # Format text for forest plot column
+  mutate(Statistics = formatC(Statistics, format = "f", digits = 3)) %>%
+  mutate(Method = case_when(
+    Method == "plink20" ~ "MR",
+    Method == "plink19" ~ "2SLS (1)",
+    Method == "plink20nosex" ~ "2SLS (2)",
+    Method == "plink20unharm" ~ "2SLS (3)",
+    Method == "diag" ~ "2SRI (Binary)",
+    TRUE ~ Method
+  )) # Remove grouping to avoid issues in further processing
+```
+
+漂亮版本的
+
+```{r}
+png(filename = "forest_table_plot_3networks.png", width = 27*1.25, height = (28/9)*18, units = "in", res = 300)
+
+num_rows <- nrow(forest_data)
+row_seq <- seq(num_rows * 2, 2, by = -2)
+
+par(mai = c(0, 0, 0, 0))  # Reduce bottom margin to lift x-axis
+
+# Set plot area
+plot(forest_data$Coefficient, row_seq, pch = 15, 
+     xlim = c(-21.5, 20.5),
+     ylim = c(0, num_rows * 2 + 1.8), 
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Background zebra striping
+for (i in seq(1, length(row_seq), by = 5)) {
+  rect(-23, row_seq[i] - 0.75, 20, row_seq[i] + 0.95, col = "gray95", border = NA)
+}
+
+# # Outer border
+# rect(-13, 0, 12.5, num_rows * 2 + 5, border = "darkblue", lwd = 3)
+
+# Axis
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -12)
+
+# Reference vertical line
+segments(0, 1, 0, num_rows * 2 + 1, lty = 1, col = "black")
+
+# # Horizontal separators
+# for (pos in unique(row_seq[!duplicated(forest_data$ROI)][-2])) {
+#   segments(-13, pos + 1, 12.5, pos + 1, col = "darkgray", lty = 2, lwd = 1.5)
+# }
+
+# Header (with color)
+header_color <- "darkblue"
+text(-22.25, num_rows * 2 + 2.8, "ROI", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-16.5, num_rows * 2 + 2.8, "Network", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-12, num_rows * 2 + 2.8, "Method", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-5.5, num_rows * 2 + 2.8, "IVs", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(6.5, num_rows * 2 + 2.8, "Coefficient\n(95% CI)", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(12.5, num_rows * 2 + 2.8, "t statistics\n(z for binary)", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(18.5, num_rows * 2 + 2.8, "FDR P", cex = 2.75, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+
+# Points and error bars with color coding
+point_colors <- ifelse(forest_data$Coefficient > 0, "firebrick", "darkblue")
+points(forest_data$Coefficient, row_seq, pch = 15, col = point_colors, cex = 1.8)
+
+segments(forest_data$Lower_CI, row_seq, forest_data$Upper_CI, row_seq, col = point_colors)
+
+# Content table
+text(-22.5, row_seq, forest_data$ROI, cex = 2.75, pos = 4)
+text(-16, row_seq, forest_data$Network, cex = 2.75, pos = 4)
+text(-12, row_seq, forest_data$Method, cex = 2.75, pos = 4)
+text(-5.5, row_seq, forest_data$IVs, cex = 2.75, pos = 4)
+text(5.5, row_seq, forest_data$Forest_Plot, cex = 2.25, pos = 4)
+text(13.5, row_seq, format(forest_data$Statistics, digits = 3), cex = 2.25, pos = 4)
+text(18.5, row_seq, forest_data$Pvalue_bh_sci, cex = 2.25, pos = 4)
+
+dev.off()
+
+```
+
+
+
+
+## FOREST PLOTS TABLE
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# LOOK significant in 4 methods, and pick only several networks: DMN, CON, DAN, LANG:
+all_mr_pair <- all_mr_pair %>%
+  filter(
+    ROI %in%
+      c("L_MST", "R_MST", "L_1", "R_1", "L_TE2p", "R_TE2p", "", "L_6mp", "R_6mp", "L_LIPd", "R_LIPd", "L_PFt", "R_PFt", "L_TPOJ1", "R_TPOJ1", "L_31a", "R_31a", "L_s32", "R_s32")
+  ) %>%
+  mutate(HEMISPHERE = ifelse(is.na(HEMISPHERE), "L", HEMISPHERE))
+  
+
+# Function to format p-values in scientific notation with 2 decimal places
+format_pval_sci <- function(pval) {
+  if (!is.na(pval)) {
+    return(formatC(pval, format = "e", digits = 2))  # Convert to scientific notation with 2 decimal places
+  } else {
+    return(NA)
+  }
+}
+
+forest_data_pairs <- all_mr_pair %>%
+  filter(iv_plink20_p_bh < 0.05) %>%
+  select(roi, Network, ROI, Name, 
+         iv_plink20_coeff, iv_plink20_se, iv_plink20_stat, iv_plink20_p, iv_plink20_p_bh) %>%#,
+         # iv_plink19_coeff, iv_plink19_se, iv_plink19_stat, iv_plink19_p, iv_plink19_p_bh, 
+         # iv_plink20nosex_coeff, iv_plink20nosex_se, iv_plink20nosex_stat, iv_plink20nosex_p, iv_plink20nosex_p_bh,
+         # iv_plink20unharm_coeff, iv_plink20unharm_se, iv_plink20unharm_stat, iv_plink20unharm_p, iv_plink20unharm_p_bh,
+         # iv_diag_coeff, iv_diag_se, iv_diag_stat, iv_diag_p, iv_diag_p_bh) %>%
+
+  # Pivot longer for multiple methods (coefficients, SEs, p-values, p_bh)
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_([^_]*)_(.*)"  # Extract method and value type
+  ) %>%
+
+  # Rename columns for clarity
+  rename(
+    Coefficient = coeff,
+    SE = se,
+    Statistics = stat,
+    Pvalue = p,
+    Pvalue_bh = p_bh
+  ) 
+
+# Extract SNP counts and reshape into long format
+n_snps_data <- all_mr_pair %>%
+  select(roi, 
+         n_snps_plink20, n_snps_plink19, n_snps_plink20nosex, 
+         n_snps_plink20unharm, n_snps_diag) %>%
+
+  # Pivot longer for multiple methods (SNP counts)
+  pivot_longer(cols = starts_with("n_snps_"),
+               names_to = "Method",
+               names_prefix = "n_snps_",
+               values_to = "IVs")
+
+forest_data_pairs <- forest_data_pairs %>% inner_join(n_snps_data, by = c("roi", "Method")) %>%
+  select(roi, ROI, Name, Network, Method, IVs, Coefficient, SE, Statistics, Pvalue, Pvalue_bh)
+
+forest_data_pairs <- forest_data_pairs %>%
+  # Apply scientific notation formatting to p-values
+  mutate(
+    Pvalue_bh_sci = sapply(Pvalue_bh, format_pval_sci),
+    Lower_CI = Coefficient - 1.96 * SE,  # Compute 95% CI lower bound
+    Upper_CI = Coefficient + 1.96 * SE,  # Compute 95% CI upper bound
+    Forest_Plot = paste0(
+      format(round(Coefficient, 2), nsmall = 2), " (", 
+      format(round(Lower_CI, 2), nsmall = 2), ", ", 
+      format(round(Upper_CI, 2), nsmall = 2), ")"
+    )) %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup() %>%  # Format text for forest plot column
+  mutate(Method = case_when(
+    Method == "plink20" ~ "MR",
+    Method == "plink19" ~ "2SLS (1)",
+    Method == "plink20nosex" ~ "2SLS (2)",
+    Method == "plink20unharm" ~ "2SLS (3)",
+    Method == "diag" ~ "2SRI (Binary)",
+    TRUE ~ Method
+  )) %>% # Remove grouping to avoid issues in further processing
+  mutate(
+    Hemisphere = case_when(
+      str_detect(Name, "^Left") ~ "Left",
+      str_detect(Name, "^Right") ~ "Right",
+      TRUE ~ NA_character_  # just in case there's something unexpected
+    ),
+    Pair = str_remove(Name, "^(Left|Right)\\s*")  # remove Left/Right with any trailing spaces
+  ) %>%
+  arrange(Pair) %>%
+  arrange(Pair, factor(Hemisphere, levels = c("Left", "Right"))) %>%
+  group_by(Pair) %>%
+  mutate(Pair = ifelse(Hemisphere == "Right", "", Pair)) %>%
+  ungroup()
+
+#====================================================================================
+# Change name manually
+forest_data_pairs[1, "Pair"] <- "Area\nTPOJ1"
+forest_data_pairs[5, "Pair"] <- "Area\n31a"
+forest_data_pairs[7, "Pair"] <- "Area\n6mp"
+forest_data_pairs[9, "Pair"] <- "Area\nLIPd"
+forest_data_pairs[11, "Pair"] <- "Area\nPFt"
+forest_data_pairs[13, "Pair"] <- "Area\nTE2p"
+forest_data_pairs[15, "Pair"] <- "Area\ns32"
+forest_data_pairs[17, "Pair"] <- "Area\nMST"
+#====================================================================================
+```
+
+Forest Plot
+
+```{r}
+# # Font
+# library(Cairo) # Not working
+# cairo_ps("test.eps", family = "Times")
+
+png(filename = "forest_table_plot_allsig_pairs.png", width = 11*1.25, height = 20*1.25, units = "in", res = 300)
+
+num_rows <- nrow(forest_data_pairs)
+row_seq <- seq(num_rows * 2, 2, by = -2)
+
+par(mai = c(0, 0, 0, 0))  # Reduce bottom margin to lift x-axis
+
+# Set plot area
+plot(forest_data_pairs$Coefficient, row_seq, pch = 15, 
+     xlim = c(-12, 19.5),
+     ylim = c(0, num_rows * 2 + 2.25), 
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Background zebra striping
+for (i in seq(1, length(row_seq), by = 4)) {
+  rect(-13.5, row_seq[i] - 2.75, 21, row_seq[i] + 1.3, col = "gray95", border = NA)
+}
+
+# # Outer border
+# rect(-13, 0, 12.5, num_rows * 2 + 5, border = "darkblue", lwd = 3)
+
+# Axis
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5, line = -7, family = "Times New Roman")
+
+# Reference vertical line
+segments(0, 1, 0, num_rows * 2 + 1, lty = 1, col = "black")
+
+# # Horizontal separators
+# for (pos in unique(row_seq[!duplicated(forest_data_pairs$ROI)][-2])) {
+#   segments(-13, pos + 1, 12.5, pos + 1, col = "darkgray", lty = 2, lwd = 1.5)
+# }
+
+# Header (with color)
+header_color <- "black"
+text(-12.5, num_rows * 2 + 2.25, "ROI", cex = 3.2, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+text(-8, num_rows * 2 + 2.25, "Hemisphere", cex = 3.2, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+#text(-16.5, num_rows * 2 + 2.8, "Network", cex = 3.4, font = 2, pos = 4, col = header_color)
+#text(-12, num_rows * 2 + 2.8, "Method", cex = 3.4, font = 2, pos = 4, col = header_color)
+#text(-5.5, num_rows * 2 + 2.8, "IVs", cex = 3.4, font = 2, pos = 4, col = header_color)
+text(5.5, num_rows * 2 + 2.25, "Coefficient\n(95% CI)", cex = 3.2, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+#text(10.5, num_rows * 2 + 2.8, "t statistics\n(z for binary)", cex = 3.4, font = 2, pos = 4, col = header_color)
+text(15, num_rows * 2 + 2.25, "FDR P", cex = 3.2, font = 2, family = "Times New Roman", pos = 4, col = header_color)
+
+# Points and error bars with color coding
+point_colors <- ifelse(forest_data_pairs$Coefficient > 0, "black", "black")
+points(forest_data_pairs$Coefficient, row_seq, pch = 15, col = point_colors, cex = 1.8)
+
+segments(forest_data_pairs$Lower_CI, row_seq, forest_data_pairs$Upper_CI, row_seq, col = point_colors)
+
+# Content table
+text(-12.5, row_seq, forest_data_pairs$Pair, cex = 3.0, family = "Times New Roman", pos = 4)
+text(-6.5, row_seq, forest_data_pairs$Hemisphere, cex = 3.0, family = "Times New Roman", pos = 4)
+#text(-16, row_seq, forest_data_pairs$Network, cex = 3.0, pos = 4)
+#text(-12, row_seq, forest_data_pairs$Method, cex = 3.0, pos = 4)
+#text(-5.5, row_seq, forest_data_pairs$IVs, cex = 3.0, pos = 4)
+text(4, row_seq, forest_data_pairs$Forest_Plot, cex = 2.75, family = "Times New Roman", pos = 4)
+#text(11.5, row_seq, format(forest_data_pairs$Statistics, digits = 3), cex = 3.0, pos = 4)
+text(15, row_seq, forest_data_pairs$Pvalue_bh_sci, cex = 2.75, family = "Times New Roman", pos = 4)
+
+dev.off()
+
+```
+
+
+#==============================================================================================================================================
+#==============================================================================================================================================
+#==============================================================================================================================================
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+forest_data <- all_mr %>%
+  filter(iv_plink20_p_bh < 0.05) %>%
+  select(roi, Network, ROI, Name, 
+         iv_plink20_coeff, iv_plink20_se, iv_plink20_p, iv_plink20_p_bh,
+         iv_plink19_coeff, iv_plink19_se, iv_plink19_p, iv_plink19_p_bh,
+         iv_plink20nosex_coeff, iv_plink20nosex_se, iv_plink20nosex_p, iv_plink20nosex_p_bh,
+         iv_plink20unharm_coeff, iv_plink20unharm_se, iv_plink20unharm_p, iv_plink20unharm_p_bh,
+         iv_diag_coeff, iv_diag_se, iv_diag_p, iv_diag_p_bh) %>%
+
+  # Pivot longer for multiple methods (coefficients, SEs, p-values, p_bh)
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_([^_]*)_(.*)"  # Extract method and value type
+  ) %>%
+
+  # Rename columns for clarity
+  rename(
+    Coefficient = coeff,
+    SE = se,
+    Pvalue = p,
+    Pvalue_bh = p_bh
+  )
+
+# Extract SNP counts and reshape into long format
+n_snps_data <- all_mr %>%
+  select(roi, 
+         n_snps_plink20, n_snps_plink19, n_snps_plink20nosex, 
+         n_snps_plink20unharm, n_snps_diag) %>%
+
+  # Pivot longer for multiple methods (SNP counts)
+  pivot_longer(cols = starts_with("n_snps_"),
+               names_to = "Method",
+               names_prefix = "n_snps_",
+               values_to = "IVs")
+
+forest_data <- forest_data %>% inner_join(n_snps_data, by = c("roi", "Method")) %>%
+  select(roi, ROI, Name, Network, Method, IVs, Coefficient, SE, Pvalue, Pvalue_bh)
+
+forest_data <- forest_data %>%
+  group_by(roi) %>%
+  mutate(
+    roi = ifelse(row_number() == 1, roi, NA),
+    ROI = ifelse(row_number() == 1, ROI, NA),
+    Name = ifelse(row_number() == 1, Name, NA),
+    Network = ifelse(row_number() == 1, Network, NA)
+  ) %>%
+  ungroup()  # Remove grouping to avoid issues in further processing
+
+library(latex2exp)
+library(dplyr)
+
+# Format p-values in LaTeX math notation using latex2exp
+forest_data <- forest_data %>%
+  mutate(
+    Lower_CI = Coefficient - 1.96 * SE,  # Compute 95% CI lower bound
+    Upper_CI = Coefficient + 1.96 * SE,  # Compute 95% CI upper bound
+    Forest_Plot = paste0(
+      format(round(Coefficient, 2), nsmall = 2), " (", 
+      format(round(Lower_CI, 2), nsmall = 2), " - ", 
+      format(round(Upper_CI, 2), nsmall = 2), ")"
+    )) %>%  # Format text for forest plot column
+  mutate(Method = case_when(
+    Method == "plink20" ~ "MR",
+    Method == "plink19" ~ "2SLS (1)",
+    Method == "plink20nosex" ~ "2SLS (2)",
+    Method == "plink20unharm" ~ "2SLS (3)",
+    Method == "diag" ~ "2SRI (Binary)",
+    TRUE ~ Method
+  ))
+```
+
+WORKING!
+```{r}
+# Save the plot as a PNG file
+png(filename = "forest_table_plot_allsig.png", width = 24.5, height = 60, units = "in", res = 300)
+
+# Define plotting parameters
+num_rows <- nrow(forest_data)
+row_seq <- seq(num_rows * 2, 2, by = -2)  # Increased spacing
+par(mai = c(0.5, 0.5, 0, 0.5))  # Adjust margins
+
+# Find unique ROI positions (start of each ROI group)
+unique_roi_positions <- row_seq[!duplicated(forest_data$ROI)][-2]
+
+# Set plot area
+plot(forest_data$Coefficient, row_seq, pch = 15, 
+     xlim = c(-13, 12.5),
+     ylim = c(0, num_rows * 2 + 5),  # Increased ylim
+     xlab = '', ylab = '', yaxt = 'n', xaxt = 'n', 
+     bty = 'n')
+
+# Add x-axis for coefficients
+axis(1, at = seq(-3.0, 3.5, by = 0.5), cex.axis = 1.5)  # Larger x-axis labels
+
+# Add reference vertical line at zero
+segments(0, -1, 0, num_rows * 2 + 2, lty = 3, col = "red")
+
+# Add confidence intervals as horizontal error bars
+segments(forest_data$Lower_CI, row_seq, 
+         forest_data$Upper_CI, row_seq, col = "black")
+
+# **Add horizontal separator lines for each ROI**
+for (pos in unique_roi_positions) {
+  segments(-16, pos + 1, 10, pos + 1, col = "gray50", lty = 2, lwd = 1.2)  # Dashed gray lines
+}
+
+# Add column titles (with larger text)
+text(-13, num_rows * 2 + 5, "ROI", cex = 2.4, font = 2, pos = 4)
+text(-11, num_rows * 2 + 5, "Network", cex = 2.4, font = 2, pos = 4)
+text(-8, num_rows * 2 + 5, "Method", cex = 2.4, font = 2, pos = 4)
+text(-4.5, num_rows * 2 + 5, "IVs", cex = 2.4, font = 2, pos = 4)
+text(5, num_rows * 2 + 5, "Coefficient (95% CI)", cex = 2.4, font = 2, pos = 4)
+text(9.9, num_rows * 2 + 5, "FDR-adjusted P", cex = 2.4, font = 2, pos = 4)
+
+# Fill in the table with ROI details (with larger text)
+text(-13, row_seq, forest_data$ROI, cex = 2.1, pos = 4)
+text(-11, row_seq, forest_data$Network, cex = 2.1, pos = 4)
+text(-8, row_seq, forest_data$Method, cex = 2.1, pos = 4)
+text(-4.5, row_seq, forest_data$IVs, cex = 2.1, pos = 4)
+text(5, row_seq, forest_data$Forest_Plot, cex = 2.1, pos = 4)
+text(9.9, row_seq, forest_data$Pvalue_bh, cex = 2.1, pos = 4)
+
+# Finish saving the image
+dev.off()
+
+```
+
+
+
+# FOREST PLOT NO TABLE
+
+```{r}
+# Filter the data to include only significant ROIs
+iv_data_filtered <- iv_plink20 %>%
+  filter(iv_plink20_p_bh <= 0.05)
+
+# Split the data into two panels based on ROI names
+iv_data_filtered <- iv_data_filtered %>%
+  mutate(panel = ifelse(grepl("Right", Name), "Right Hemisphere", "Left Hemisphere"))
+
+# change Netowrk format for plotting
+iv_data_filtered <- iv_data_filtered %>%
+  mutate(Network = paste0("(", Network, ")"))
+
+# Create the forest plot with combined labels
+combined_plot <- ggplot(iv_data_filtered, aes(x = reorder(paste(Name, Network), iv_plink20_coeff), y = iv_plink20_coeff)) +
+  geom_segment(aes(xend = paste(Name, Network), y = iv_plink20_coeff - 1.96 * iv_plink20_se,
+                   yend = iv_plink20_coeff + 1.96 * iv_plink20_se),
+               color = "#c84326", size = 1) +  # Solid horizontal bars
+  geom_text(aes(x = paste(Name, Network), label = paste0("SNPs: ", n_snps_plink20), y = iv_plink20_coeff), 
+            position = position_dodge(width = 0.5), hjust = -1, vjust = -1, size = 3, fontface = "italic", color = "#af2a0d") +  # Adjust text position
+  facet_wrap(~ panel, ncol = 2, scales = "free_y") +  # Two panels: Left and Right Hemispheres
+  geom_point(size = 0.8, color = "#af2a0d") +  # Adjust dot size and color
+  geom_hline(yintercept=0, lty=2) + 
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Regions of Interest (ROIs)", 
+       y = "Coefficient (95% CI)") +
+  theme(axis.text.x = element_text(size = 12), # Adjust text size for Names
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 16),  
+        strip.text = element_text(size = 16),  # Panel 2itles
+        plot.title = element_text(size = 16),
+        legend.position = "none")
+
+
+# Save the plot as a PDF
+ggsave("forest_plot_ivplink20.png", combined_plot, width = 16, height = 12)
+
+print(combined_plot)
+```
+
+
+```{r}
+library(tidyr)
+
+#################################################################################
+## all MR
+all_mr <- (iv_plink20 %>% select(roi, iv_plink20_coeff, iv_plink20_p, iv_plink20_p_bh, iv_plink20_se, n_snps_plink20)) %>%
+  inner_join((iv_plink19 %>% select(roi, iv_plink19_coeff, iv_plink19_p, iv_plink19_p_bh, iv_plink19_se, n_snps_plink19)) %>% mutate(roi = paste0("roi",roi)), by = "roi") %>%
+  mutate(across(-roi, as.numeric)) %>%
+  left_join(network_data, by = "roi") %>%
+  left_join(roi_df, by = "roi") %>%
+  mutate(Network = NETWORK)
+  
+#======Plot both main and sensitivity========
+all_mr_filtered <- all_mr %>%
+  filter(iv_plink20_p_bh <= 0.05 & iv_plink19_p_bh <= 0.05)
+
+# Restructure the data by binding plink20 and plink19 results
+all_mr_restructured <- all_mr_filtered %>%
+  select(Name, iv_plink20_coeff, iv_plink20_se, n_snps_plink20, iv_plink19_coeff, iv_plink19_se, n_snps_plink19) %>%
+  pivot_longer(cols = c(iv_plink20_coeff, iv_plink19_coeff), names_to = "group", values_to = "Coefficient") %>%
+  pivot_longer(cols = c(iv_plink20_se, iv_plink19_se), names_to = "SE_Type", values_to = "SE") %>%
+  pivot_longer(cols = c(n_snps_plink20, n_snps_plink19), names_to = "N_SNPs_Type", values_to = "N_SNPs") %>%
+  filter((group == "iv_plink20_coeff" & SE_Type == "iv_plink20_se" & N_SNPs_Type == "n_snps_plink20") |
+         (group == "iv_plink19_coeff" & SE_Type == "iv_plink19_se" & N_SNPs_Type == "n_snps_plink19")) 
+
+# Correct the group variable using case_when
+all_mr_restructured <- all_mr_restructured %>%
+  mutate(group = case_when(
+    group == "iv_plink20_coeff" ~ "Plink20",
+    group == "iv_plink19_coeff" ~ "Plink19"
+  ))
+
+# Ensure the data is structured correctly
+all_mr_restructured <- all_mr_restructured %>%
+  mutate(panel = ifelse(grepl("Right", Name), "Right Hemisphere", "Left Hemisphere"))
+
+# Create the forest plot
+combined_plot <- ggplot(all_mr_restructured, aes(x = reorder(Name, Coefficient), y = Coefficient, ymin=Coefficient - 1.96 * SE, ymax=Coefficient + 1.96 * SE, col = group, fill = group)) + #reorder(Name, Coefficient)
+  # geom_segment(aes(xend = Name, y = Coefficient - 1.96 * SE, yend = Coefficient + 1.96 * SE),
+  #              position = position_dodge(width = 0.5), size = 1) +  # Separate bars
+  geom_linerange(size=1,position=position_dodge(width = 0.5)) +
+  geom_hline(yintercept=0, lty=2) +
+  geom_point(position = position_dodge(width = 0.5), size = 1.2) +  # Separate points
+  # Add text labels for Plink20
+  geom_text(data = subset(all_mr_restructured, group == "Plink20"),
+            aes(label = paste0("SNPs: ", N_SNPs)),
+            position = position_dodge(width = 0.5), hjust = -0.7, vjust = -1.6, size = 3, fontface = "italic", color = "#22577A") +
+  # Add text labels for Plink19
+  geom_text(data = subset(all_mr_restructured, group == "Plink19"),
+            aes(label = paste0("SNPs: ", N_SNPs)),
+            position = position_dodge(width = 0.5), hjust = -0.7, vjust = 2.2, size = 3, fontface = "italic", color = "#D17C18") +
+  facet_wrap(~ panel, ncol = 2, scales = "free_y") +  # Two panels: Left and Right Hemispheres
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Regions of Interest (ROIs)",
+       y = "Coefficient (95% CI)", color = "Method") +
+  theme(axis.text.y = element_text(size = 12),  # Adjust text size for Names
+        strip.text = element_text(size = 12),  # Panel titles
+        legend.position = "right") +
+  scale_color_manual(values = c("Plink20" = "#97d7f3", "Plink19" = "#f6bd95"),
+                     labels = c("Plink20" = "Main MR Results", "Plink19" = "MR Sensitivity Analysis")) +
+  scale_fill_manual(values = c("Plink20" = "#97d7f3", "Plink19" = "#f6bd95"),
+                    guide = "none")
+
+ggsave("forest_plot_19&20.png", combined_plot, width = 16, height = 12)
+print(combined_plot)
+```
+
+```{r}
+#################################################################################
+
+# # Define significance labels for each ROI based on p-values in iv_plink19, iv_plink20, and iv_diag
+# all_mr <- all_mr %>%
+#   mutate(
+#     significance_label = case_when(
+#       iv_plink19_p < 0.05 & iv_plink20_p >= 0.05 & iv_diag_p >= 0.05 ~ "Main Analysis",
+#       iv_plink19_p >= 0.05 & iv_plink20_p < 0.05 & iv_diag_p >= 0.05 ~ "Sensitivity Analysis 1",
+#       iv_plink19_p >= 0.05 & iv_plink20_p >= 0.05 & iv_diag_p < 0.05 ~ "Case/Control Analysis",
+#       iv_plink19_p < 0.05 & iv_plink20_p < 0.05 & iv_diag_p >= 0.05 ~ "Main Analysis & Sensitivity Analysis 1",
+#       iv_plink19_p < 0.05 & iv_plink20_p < 0.05 & iv_diag_p < 0.05 ~ "All three",
+#       TRUE ~ "Not Significant"
+#     )
+#   )
+
+
+# read network
+network_df <- read_excel(paste0(utilities_path, "CAB-NP_v1.1_Labels-ReorderedbyNetworks.xlsx")) %>%
+  rename(roi_num = INDEX) %>% slice(1:360)
+write.csv(network_df, paste0(directory, "network_df.csv"))
+
+all_mr <- all_mr %>% left_join((network_df %>% mutate(roi = paste0("roi", roi_num))), by = "roi") %>%
+  select(-c("roi_num", "KEYVALUE", "RED", "GREEN", "BLUE", "ALPHA", "NETWORKKEY", "NETWORKSORTEDORDER"))
+
+# Check signs and summarize
+summary <- all_mr %>%
+  mutate(
+    matching_sign = sign(as.numeric(iv_plink20_coeff)) == sign(as.numeric(iv_diag_coeff)),
+    magnitude_ratio = abs(as.numeric(iv_plink20_coeff)) / abs(as.numeric(iv_diag_coeff))
+  ) %>%
+  summarise(
+    total_ROIs = n(),
+    matching_signs = sum(matching_sign, na.rm = TRUE),
+    differing_signs = sum(!matching_sign, na.rm = TRUE)
+    #mean_magnitude_ratio = mean(magnitude_ratio[matching_sign], na.rm = TRUE),
+    #median_magnitude_ratio = median(magnitude_ratio[matching_sign], na.rm = TRUE)
+  )
+
+# Calculate correlation for matching signs only
+matching_rois <- all_mr %>%
+  filter(sign(as.numeric(iv_plink20_coeff)) == sign(as.numeric(iv_diag_coeff)))
+
+correlation <- cor(matching_rois$iv_plink20_coeff, matching_rois$iv_diag_coeff, use = "complete.obs")
+
+# Add the correlation to the summary table
+summary <- summary %>%
+  mutate(correlation_for_matching_ROIs = correlation)
+
+# Print the updated summary
+print(summary)
+
+write.csv(all_mr, "diag_vs_score_MR_plink20sexunrelated.csv")
+```
+
+Get bilateral 9 ROIs
+```{r}
+View(iv_plink20 %>% filter(iv_plink20_p_bh < 0.05) %>%
+  mutate(ROI_short = substr(ROI, 3, nchar(ROI))) %>%
+  group_by(ROI_short) %>%
+  filter(n() > 1) %>%
+  ungroup() %>% select(ROI, Name, iv_plink20_coeff, iv_plink20_p, iv_plink20_p_bh, Network))
+```
+
+
+
+```{r}
+mydf <- data.frame(
+    SubgroupH=c('Age',NA,NA,'Sex',NA,NA),
+    Subgroup=c(NA,'<70','>70',NA,'Male','Female'),
+    NoOfPatients=c(NA,2815,1935,NA,3843,908),
+    HazardRatio=c(NA,0.97,0.86,NA,0.93,0.81),
+    HazardLower=c(NA,0.77,0.69,NA,0.78,0.59),
+    HazardUpper=c(NA,1.22,1.07,NA,1.12,1.12),
+    Pvalue=c(NA,0.77,0.17,NA,0.47,0.21),
+    PvalueI=c(0.46,NA,NA,0.46,NA,NA),
+    stringsAsFactors=FALSE
+)
+
+#png('temp.png', width=8, height=4, units='in', res=400)
+rowseq <- seq(nrow(mydf),1)
+par(mai=c(1,0,0,0))
+plot(mydf$HazardRatio, rowseq, pch=15,
+    xlim=c(-10,12), ylim=c(0,7),
+    xlab='', ylab='', yaxt='n', xaxt='n',
+    bty='n')
+axis(1, seq(-2,2,by=.4), cex.axis=.5)
+
+segments(1,-1,1,6.25, lty=3)
+segments(mydf$HazardLower, rowseq, mydf$HazardUpper, rowseq)
+
+mtext('Off-Pump\nCABG Better',1, line=2.5, at=0, cex=.5, font=2)
+mtext('On-Pump\nCABG Better',1.5, line=2.5, at=2, cex=.5, font=2)
+
+text(-8,6.5, "Subgroup", cex=.75, font=2, pos=4)
+t1h <- ifelse(!is.na(mydf$SubgroupH), mydf$SubgroupH, '')
+text(-8,rowseq, t1h, cex=.75, pos=4, font=3)
+t1 <- ifelse(!is.na(mydf$Subgroup), mydf$Subgroup, '')
+text(-7.5,rowseq, t1, cex=.75, pos=4)
+
+text(-5,6.5, "No. of\nPatients", cex=.75, font=2, pos=4)
+t2 <- ifelse(!is.na(mydf$NoOfPatients), format(mydf$NoOfPatients,big.mark=","), '')
+text(-3, rowseq, t2, cex=.75, pos=2)
+
+text(-1,6.5, "Hazard Ratio (95%)", cex=.75, font=2, pos=4)
+t3 <- ifelse(!is.na(mydf$HazardRatio), with(mydf, paste(HazardRatio,' (',HazardLower,'-',HazardUpper,')',sep='')), '')
+text(3,rowseq, t3, cex=.75, pos=4)
+
+text(7.5,6.5, "P Value", cex=.75, font=2, pos=4)
+t4 <- ifelse(!is.na(mydf$Pvalue), mydf$Pvalue, '')
+text(7.5,rowseq, t4, cex=.75, pos=4)
+
+text(10,6.5, "P Value for\nInteraction", cex=.75, font=2, pos=4)
+t5 <- ifelse(!is.na(mydf$PvalueI), mydf$PvalueI, '')
+text(10,rowseq, t5, cex=.75, pos=4)
+#dev.off()
+
+```
+
+
+
+
+
+### We compared 3 MR methods: 
+<!-- - MRCUE using fastGWA results: (mrcue_fastgwa), with race, sex, ethnicity as covariates, all samples -->
+<!-- - IVW using plink2.0 results: (ivw_plink20), with sex as covariates, unrelated samples -->
+- IVReg using plink1.9 results: (iv_plink19), no covariates, all samples
+- IVReg using plink2.0 results: (iv_plink20), with sex as covariates, unrelated sample
+- Diag
+<!-- - IVReg using fastGWA results: (iv_fastgwa), with race, sex, ethnicity as covariates, all samples -->
+
+
+### Plot on Brain
+005
+```{r}
+# Define colors for each significance category, with a lighter gray for "No Data"
+category_colors <- c(
+  "Main Analysis" = "#3399FF",
+  "Sensitivity Analysis 1" = "#17becf",
+  "Case/Control Analysis" = "#1f77b4",
+  "Main Analysis & Sensitivity Analysis 1" = "#ff7f0e",
+  "All three" = "#d62728",
+  "Not Significant" = "#c7c7c7"  # Light grey for "No Data" or not significant
+)
+
+###########################################################################
+roi_glasser <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') %>% str_split(.,"_",simplify = TRUE) %>% data.frame() # remember to read coupling_cbcl.RData
+colnames(roi_glasser) <- c("hemi","region")
+roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+roi_glasser <- roi_glasser %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI))
+roi_glasser <- roi_glasser %>%
+  inner_join(all_mr, by = c("ROI" = "roi"))  # ROI is name
+
+# Merging the significance labels into the data for plotting
+gldata <- tibble(
+  label = roi_glasser$label,
+  Significance = roi_glasser$significance_label
+)
+
+cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(atlas = glasser,
+             position = position_brain(cortical_pos), ### there is different options like "horizontal", "side ~ hemi"
+             aes(fill = Significance)) + scale_fill_manual(values = category_colors,
+                                                       na.value = "#d3d3d3"#,
+                                                       ) + ggtitle("Cortical Regions") +
+  theme_bw() +
+  theme(text = element_text(size = 10)) +
+  theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+  theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+#==============test
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/mr_comparison_005_glasser.png"), plot = plot, width = 10, height = 8, dpi = 300)
+write.csv(data.frame(roi_glasser), paste0(directory, "visualization/mr_comparison_005_glasser.csv"))
+#=============================================================================
+#### Get all data
+subcor <- mmp_subcor[1:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+colnames(subcor) <- c('region','hemi')
+
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI)) %>%
+  slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+aseg$data$label
+subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+subcor <- subcor %>%
+  inner_join(all_mr, by = c("ROI"="roi"))  # ROI is name
+gldata <- tibble(
+  label = subcor$label,
+  Significance = subcor$significance_label
+)
+
+plot <- gldata %>%
+    #group_by(groups) %>%
+    ggplot() +
+    geom_brain(atlas = aseg, aes(fill = Significance))+
+    scale_fill_manual(values = category_colors,
+                       na.value = "#c7c7c7"#,
+                       ) + ggtitle("Cortical Regions") +
+    theme_bw() +
+    theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+    theme(text = element_text(size = 15)) +
+    theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/mr_comparison_005_subcor", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+write.csv(data.frame(subcor), paste0(directory, "visualization/mr_comparison_005_subcor.csv"))
+```
+
+bh
+```{r}
+library(dplyr)
+
+# Apply BH correction for all three methods
+all_mr <- all_mr %>%
+  mutate(
+    iv_plink19_p_bh = p.adjust(iv_plink19_p, method = "BH"),
+    iv_plink20_p_bh = p.adjust(iv_plink20_p, method = "BH"),
+    iv_diag_p_bh = p.adjust(iv_diag_p, method = "BH")
+  )
+
+# Define the significance threshold after BH correction
+significance_threshold <- 0.05
+
+# Define significance labels for each ROI based on the BH-corrected p-values
+all_mr <- all_mr %>%
+  mutate(
+    significance_label_bh = case_when(
+      iv_plink19_p_bh < significance_threshold & iv_plink20_p_bh >= significance_threshold & iv_diag_p_bh >= significance_threshold ~ "Main Analysis",
+      iv_plink19_p_bh >= significance_threshold & iv_plink20_p_bh < significance_threshold & iv_diag_p_bh >= significance_threshold ~ "Sensitivity Analysis 1",
+      iv_plink19_p_bh >= significance_threshold & iv_plink20_p_bh >= significance_threshold & iv_diag_p_bh < significance_threshold ~ "Case/Control Analysis",
+      iv_plink19_p_bh < significance_threshold & iv_plink20_p_bh < significance_threshold & iv_diag_p_bh >= significance_threshold ~ "Main Analysis & Sensitivity Analysis 1",
+      iv_plink19_p_bh < significance_threshold & iv_plink20_p_bh < significance_threshold & iv_diag_p_bh < significance_threshold ~ "All three",
+      TRUE ~ "Not Significant"
+    )
+  )
+
+write.csv(data.frame(all_mr), paste0(directory, "visualization/all_mr.csv"))
+```
+
+```{r}
+# Define colors for each significance category, with a lighter gray for "No Data"
+category_colors <- c(
+  "Main Analysis" = "#3399FF",
+  "Sensitivity Analysis 1" = "#17becf",
+  "Case/Control Analysis" = "#1f77b4",
+  "Main Analysis & Sensitivity Analysis 1" = "#ff7f0e",
+  "All three" = "#d62728",
+  "Not Significant" = "#c7c7c7"  # Light grey for "No Data" or not significant
+)
+
+###########################################################################
+roi_glasser <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') %>% str_split(.,"_",simplify = TRUE) %>% data.frame() # remember to read coupling_cbcl.RData
+colnames(roi_glasser) <- c("hemi","region")
+roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+roi_glasser <- roi_glasser %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI))
+roi_glasser <- roi_glasser %>%
+  inner_join(all_mr, by = c("ROI" = "roi"))  # ROI is name
+
+# Merging the significance labels into the data for plotting
+gldata <- tibble(
+  label = roi_glasser$label,
+  Significance = roi_glasser$significance_label_bh
+)
+
+cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+plot <- gldata %>%
+  ggplot() +
+  geom_brain(atlas = glasser,
+             position = position_brain(cortical_pos), ### there is different options like "horizontal", "side ~ hemi"
+             aes(fill = Significance)) + scale_fill_manual(values = category_colors,
+                                                       na.value = "#c7c7c7"#,
+                                                       ) + ggtitle("Cortical Regions") +
+  theme_bw() +
+  theme(text = element_text(size = 10)) +
+  theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+  theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+#==============test
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/mr_comparison_bh_glasser.png"), plot = plot, width = 10, height = 8, dpi = 300)
+write.csv(data.frame(roi_glasser), paste0(directory, "visualization/mr_comparison_bh_glasser.csv"))
+#=============================================================================
+#### Get all data
+subcor <- mmp_subcor[1:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+colnames(subcor) <- c('region','hemi')
+
+subcor <- subcor %>%
+  tibble::rownames_to_column(var = "ROI") %>%
+  mutate(ROI = paste0("roi", ROI)) %>%
+  slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+aseg$data$label
+subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+subcor$label[19] <- 'Brain-Stem'
+subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+subcor <- subcor %>%
+  inner_join(all_mr, by = c("ROI"="roi"))  # ROI is name
+gldata <- tibble(
+  label = subcor$label,
+  Significance = subcor$significance_label_bh
+)
+
+plot <- gldata %>%
+    #group_by(groups) %>%
+    ggplot() +
+    geom_brain(atlas = aseg, aes(fill = Significance))+
+    scale_fill_manual(values = category_colors,
+                       na.value = "#d3d3d3"#,
+                       ) + ggtitle("Cortical Regions") +
+    theme_bw() +
+    theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+    theme(text = element_text(size = 15)) +
+    theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+  dir.create(paste0(directory, "visualization/"), recursive = F)
+}
+ggsave(paste0(directory, paste0("visualization/mr_comparison_bh_subcor", ".png")), plot = plot, width = 10, height = 8, dpi = 300)
+write.csv(data.frame(subcor), paste0(directory, "visualization/mr_comparison_bh_subcor.csv"))
+```
+
+### Plot networks
+005
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Filter for significant ROIs based on each method, excluding case/control
+filtered_data <- all_mr %>%
+  filter((iv_plink19_p < 0.05 & !is.na(iv_plink19_coeff)) |
+         (iv_plink20_p < 0.05 & !is.na(iv_plink20_coeff)))
+
+# Reshape data to long format for plotting with method as a variable
+long_data <- filtered_data %>%
+  select(NETWORK, roi, iv_plink19_coeff, iv_plink20_coeff, iv_plink19_p, iv_plink20_p) %>%
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_(plink19|plink20)_(coeff|p)"
+  ) %>%
+  # Filter for significant results in each method
+  filter((Method == "plink19" & p < 0.05) |
+         (Method == "plink20" & p < 0.05)) %>%
+  select(NETWORK, roi, Method, coeff) %>%
+  rename(Coefficient = coeff) %>%
+  mutate(Method = case_when(
+    Method == "plink19" ~ "Main_Analysis",
+    Method == "plink20" ~ "Sensitivity_Analysis_1"
+  ))
+
+# Define colors for each MR method
+method_colors <- c("Main_Analysis" = "#17becf", "Sensitivity_Analysis_1" = "#2ca02c")
+
+# Plot boxplots for significant IV coefficients by network and method
+boxplot_plot <- ggplot(long_data, aes(x = NETWORK, y = Coefficient, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.75), outlier.shape = NA) +  # Separate boxes for each method
+  scale_fill_manual(values = method_colors) +  # Apply colors for methods
+  labs(
+    title = "IV Coefficients by Network and MR Method",
+    x = "Network",
+    y = "IV Coefficient",
+    fill = "MR Method"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/iv_coefficients_by_network_boxplot_005.png"), 
+       plot = boxplot_plot, width = 12, height = 8, dpi = 300)
+
+```
+
+bh
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Filter for significant ROIs based on each method, excluding case/control
+filtered_data <- all_mr %>%
+  filter((iv_plink19_p_bh < 0.05 & !is.na(iv_plink19_coeff)) |
+         (iv_plink20_p_bh < 0.05 & !is.na(iv_plink20_coeff)))
+
+# Reshape data to long format for plotting with method as a variable
+long_data <- filtered_data %>%
+  select(NETWORK, roi, iv_plink19_coeff, iv_plink20_coeff, iv_plink19_p_bh, iv_plink20_p_bh) %>%
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_(plink19|plink20)_(coeff|p_bh)"
+  ) %>%
+  # Filter for significant results in each method
+  filter((Method == "plink19" & p_bh < 0.05) |
+         (Method == "plink20" & p_bh < 0.05)) %>%
+  select(NETWORK, roi, Method, coeff) %>%
+  rename(Coefficient = coeff) %>%
+  mutate(Method = case_when(
+    Method == "plink19" ~ "Main_Analysis",
+    Method == "plink20" ~ "Sensitivity_Analysis_1"
+  ))
+
+# Define colors for each MR method
+method_colors <- c("Main_Analysis" = "#17becf", "Sensitivity_Analysis_1" = "#2ca02c")
+
+# Plot boxplots for significant IV coefficients by network and method
+boxplot_plot <- ggplot(long_data, aes(x = NETWORK, y = Coefficient, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.75), outlier.shape = NA) +  # Separate boxes for each method
+  scale_fill_manual(values = method_colors) +  # Apply colors for methods
+  labs(
+    title = "IV Coefficients by Network and MR Method",
+    x = "Network",
+    y = "IV Coefficient",
+    fill = "MR Method"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/iv_coefficients_by_network_boxplot_bh.png"), 
+       plot = boxplot_plot, width = 12, height = 8, dpi = 300)
+
+```
+
+### box with dots Plot
+005
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Filter for significant ROIs based on each method, excluding case/control
+filtered_data <- all_mr %>%
+  filter((iv_plink19_p < 0.05 & !is.na(iv_plink19_coeff)) |
+         (iv_plink20_p < 0.05 & !is.na(iv_plink20_coeff)))
+
+# Reshape data to long format for plotting with method as a variable
+long_data <- filtered_data %>%
+  select(NETWORK, roi, iv_plink19_coeff, iv_plink20_coeff, iv_plink19_p, iv_plink20_p) %>%
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_(plink19|plink20)_(coeff|p)"
+  ) %>%
+  # Filter for significant results in each method
+  filter((Method == "plink19" & p < 0.05) |
+         (Method == "plink20" & p < 0.05)) %>%
+  select(NETWORK, roi, Method, coeff) %>%
+  rename(Coefficient = coeff) %>%
+  mutate(Method = case_when(
+    Method == "plink19" ~ "Main_Analysis",
+    Method == "plink20" ~ "Sensitivity_Analysis_1"
+  ))
+
+# Define colors for each MR method
+method_colors <- c("Main_Analysis" = "#17becf", "Sensitivity_Analysis_1" = "#2ca02c")
+
+# Plot box plot with transparent box and solid dots
+boxplot_with_dots <- ggplot(long_data, aes(x = NETWORK, y = Coefficient, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.75), width = 0.5, outlier.shape = NA, color = "black", alpha = 0.4) +  # Transparent box plot
+  geom_jitter(aes(color = Method), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1.5, alpha = 0.9) +  # Solid dots
+  scale_fill_manual(values = method_colors) +
+  scale_color_manual(values = method_colors) +
+  labs(
+    title = "IV Coefficients by Network and MR Method",
+    x = "Network",
+    y = "IV Coefficient",
+    fill = "MR Method",
+    color = "MR Method"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/iv_coefficients_by_network_boxplot_with_dots_005.png"), 
+       plot = boxplot_with_dots, width = 12, height = 8, dpi = 300)
+
+```
+
+bh
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Filter for significant ROIs based on each method, excluding case/control
+filtered_data <- all_mr %>%
+  filter((iv_plink19_p_bh < 0.05 & !is.na(iv_plink19_coeff)) |
+         (iv_plink20_p_bh < 0.05 & !is.na(iv_plink20_coeff)))
+
+# Reshape data to long format for plotting with method as a variable
+long_data <- filtered_data %>%
+  select(NETWORK, roi, iv_plink19_coeff, iv_plink20_coeff, iv_plink19_p_bh, iv_plink20_p_bh) %>%
+  pivot_longer(
+    cols = starts_with("iv_"),
+    names_to = c("Method", ".value"),
+    names_pattern = "iv_(plink19|plink20)_(coeff|p_bh)"
+  ) %>%
+  # Filter for significant results in each method
+  filter((Method == "plink19" & p_bh < 0.05) |
+         (Method == "plink20" & p_bh < 0.05)) %>%
+  select(NETWORK, roi, Method, coeff) %>%
+  rename(Coefficient = coeff) %>%
+  mutate(Method = case_when(
+    Method == "plink19" ~ "Main_Analysis",
+    Method == "plink20" ~ "Sensitivity_Analysis_1"
+  ))
+
+# Define colors for each MR method
+method_colors <- c("Main_Analysis" = "#17becf", "Sensitivity_Analysis_1" = "#2ca02c")
+
+# Plot box plot with transparent box and solid dots
+boxplot_with_dots <- ggplot(long_data, aes(x = NETWORK, y = Coefficient, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.75), width = 0.5, outlier.shape = NA, color = "black", alpha = 0.4) +  # Transparent box plot
+  geom_jitter(aes(color = Method), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1.5, alpha = 0.9) +  # Solid dots
+  scale_fill_manual(values = method_colors) +
+  scale_color_manual(values = method_colors) +
+  labs(
+    title = "IV Coefficients by Network and MR Method",
+    x = "Network",
+    y = "IV Coefficient",
+    fill = "MR Method",
+    color = "MR Method"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/iv_coefficients_by_network_boxplot_with_dots_bh.png"), 
+       plot = boxplot_with_dots, width = 12, height = 8, dpi = 300)
+
+```
+
+
+### Plot main vs. plink20 scatter
+005
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Define custom colors for each network
+custom_colors <- c(
+  "Visual2" = "#3399FF",
+  "Language" = "#ff7f0e",
+  "Default" = "#2ca02c",
+  "Cingulo-Opercular" = "#d62728",
+  "Somatomotor" = "#9467bd",
+  "Frontoparietal" = "#8c564b",
+  "Dorsal-Attention" = "#e7ba52"
+)
+
+# Define thin, hollow shapes for each network
+custom_shapes <- c(
+  "Visual2" = 1,            # Hollow cross (thin lines)
+  "Language" = 1,           # Plus (thin lines)
+  "Default" = 3,            # Open circle
+  "Cingulo-Opercular" = 3,  # Hollow square
+  "Somatomotor" = 1,        # Hollow diamond
+  "Frontoparietal" = 4,     # Hollow triangle
+  "Dorsal-Attention" = 4    # Hollow star
+)
+
+# Filter for ROIs significant in both PLINK19 and PLINK20 (Main Analysis and Sensitivity Analysis 1)
+significant_rois <- all_mr %>%
+  filter(iv_plink19_p < 0.05 & iv_plink20_p < 0.05)
+
+# Plot the scatter plot of coefficients with color and thin, hollow shape by network
+scatter_plot <- ggplot(significant_rois, aes(x = iv_plink19_coeff, y = iv_plink20_coeff, color = NETWORK, shape = NETWORK)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +  # 45 degree line
+  geom_point(size = 2, stroke = 0.75) +  # Use smaller hollow shapes with thinner outline
+  labs(
+    title = "Scatter Plot of MR Coefficients: Main Analysis vs Sensitivity Analysis 1",
+    x = "Main Analysis Coefficients",
+    y = "Sensitivity Analysis 1 Coefficients",
+    color = "Network",
+    shape = "Network"  # Legend title for network
+  ) +
+  scale_color_manual(values = custom_colors) +  # Apply custom colors
+  scale_shape_manual(values = custom_shapes) +  # Apply thin, hollow shapes
+  theme_minimal()
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/plink19vsplink20_005.png"), 
+       plot = scatter_plot, width = 12, height = 8, dpi = 300)
+
+```
+
+bh
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Filter for ROIs significant in both PLINK19 and PLINK20 (Main Analysis and Sensitivity Analysis 1)
+significant_rois <- all_mr %>%
+  filter(iv_plink19_p_bh < 0.05 & iv_plink20_p_bh < 0.05)
+
+# Plot the scatter plot of coefficients with color and thin, hollow shape by network
+scatter_plot <- ggplot(significant_rois, aes(x = iv_plink19_coeff, y = iv_plink20_coeff, color = NETWORK, shape = NETWORK)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +  # 45 degree line
+  geom_point(size = 2, stroke = 0.75) +  # Use smaller hollow shapes with thinner outline
+  labs(
+    title = "Scatter Plot of MR Coefficients: Main Analysis vs Sensitivity Analysis 1",
+    x = "Main Analysis Coefficients",
+    y = "Sensitivity Analysis 1 Coefficients",
+    color = "Network",
+    shape = "Network"  # Legend title for network
+  ) +
+  scale_color_manual(values = custom_colors) +  # Apply custom colors
+  scale_shape_manual(values = custom_shapes) +  # Apply thin, hollow shapes
+  theme_minimal()
+
+# Save the plot
+ggsave(filename = paste0(directory, "visualization/plink19vsplink20_bh.png"), 
+       plot = scatter_plot, width = 12, height = 8, dpi = 300)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+IRRELEVANT
+
+
+### First, let's see how many ROIs have valid coefficients for each method, and how many after 0.05 threshold, and BH 0.05 threshold
+```{r, echo=F, message=FALSE, warning=FALSE}
+library(knitr)  # For kable()
+library(kableExtra)  # Optional: For better styling
+
+# Count non-NA coefficients for each method
+roi_counts <- all_mr %>%
+  summarise(
+    mrcue_fastgwa = sum(!is.na(mrcue_fastgwa_coeff)),
+    ivw_plink20 = sum(!is.na(ivw_plink20_coeff)),
+    iv_plink19 = sum(!is.na(iv_plink19_coeff)),
+    iv_plink20 = sum(!is.na(iv_plink20_coeff)),
+    iv_fastgwa = sum(!is.na(iv_fastgwa_coeff))
+  )
+
+# Print in a nice table format
+print("ROIs for each method")
+kable(roi_counts, caption = "Number of ROIs for Each Method") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+# Count non-NA coefficients after filtering by p-value < 0.05
+roi_filtered_p <- all_mr %>%
+  summarise(
+    mrcue_fastgwa = sum(!is.na(mrcue_fastgwa_coeff) & mrcue_fastgwa_p < 0.05),
+    ivw_plink20 = sum(!is.na(ivw_plink20_coeff) & ivw_plink20_p < 0.05),
+    iv_plink19 = sum(!is.na(iv_plink19_coeff) & iv_plink19_p < 0.05),
+    iv_plink20 = sum(!is.na(iv_plink20_coeff) & iv_plink20_p < 0.05),
+    iv_fastgwa = sum(!is.na(iv_fastgwa_coeff) & iv_fastgwa_p < 0.05)
+  )
+
+# Print in a nice table format
+print("ROIs for each method after filter by p=0.05")
+kable(roi_filtered_p, caption = "Number of Significant ROIs (p < 0.05) for Each Method") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+# Adjust p-values using the Benjamini-Hochberg (BH) correction and count non-NA coefficients
+roi_filtered_bh <- all_mr %>%
+  mutate(
+    mrcue_fastgwa_p_adj = p.adjust(mrcue_fastgwa_p, method = "BH"),
+    ivw_plink20_p_adj = p.adjust(ivw_plink20_p, method = "BH"),
+    iv_plink19_p_adj = p.adjust(iv_plink19_p, method = "BH"),
+    iv_plink20_p_adj = p.adjust(iv_plink20_p, method = "BH"),
+    iv_fastgwa_p_adj = p.adjust(iv_fastgwa_p, method = "BH")
+  ) %>%
+  summarise(
+    mrcue_fastgwa = sum(!is.na(mrcue_fastgwa_coeff) & mrcue_fastgwa_p_adj < 0.05),
+    ivw_plink20 = sum(!is.na(ivw_plink20_coeff) & ivw_plink20_p_adj < 0.05),
+    iv_plink19 = sum(!is.na(iv_plink19_coeff) & iv_plink19_p_adj < 0.05),
+    iv_plink20 = sum(!is.na(iv_plink20_coeff) & iv_plink20_p_adj < 0.05),
+    iv_fastgwa = sum(!is.na(iv_fastgwa_coeff) & iv_fastgwa_p_adj < 0.05)
+  )
+
+# Print in a nice table format
+print("BH corrected ROIs for each method after filter by p=0.05")
+kable(roi_filtered_bh, caption = "Number of Significant ROIs (BH-corrected p < 0.05) for Each Method") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+```
+
+We can see that PLINK results generally have more significant ROIs, but fastGWA results do not
+
+
+### Second, let's see how the direction of effects align between each MR results
+
+Here we do 3 pairwise comparisons, first without filter, then filter by p < 0.05, then filter by BH-corrected p < 0.05
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+# Load necessary package
+library(dplyr)
+
+# Function to compare two methods, remove NAs, and return the matching signs and total comparisons
+compare_signs <- function(method1, method2) {
+  # Get non-NA values
+  non_na_idx <- !is.na(method1) & !is.na(method2)
+  
+  # Calculate matching signs and total comparisons
+  matching_signs <- sum(sign(method1[non_na_idx]) == sign(method2[non_na_idx]))
+  total_comparisons <- sum(non_na_idx)
+  
+  return(c(matching_signs, total_comparisons))
+}
+
+# Create a function to handle pairwise comparisons and return a table
+pairwise_comparisons <- function(data, methods) {
+  comparison_table <- data.frame(Method1 = character(),
+                                 Method2 = character(),
+                                 Matching = integer(),
+                                 Comparisons = integer(),
+                                 Percentage = numeric(),
+                                 stringsAsFactors = FALSE)
+  
+  # Perform pairwise comparison between methods and store in the table
+  for (i in 1:(length(methods) - 1)) {
+    for (j in (i + 1):length(methods)) {
+      method1 <- data[[methods[i]]]
+      method2 <- data[[methods[j]]]
+      
+      comparison <- compare_signs(method1, method2)
+      
+      # Calculate the percentage of matching signs
+      percentage_match <- (comparison[1] / comparison[2])
+      
+      comparison_table <- rbind(comparison_table, 
+                                data.frame(Method1 = methods[i],
+                                           Method2 = methods[j],
+                                           Matching = comparison[1],
+                                           Comparisons = comparison[2],
+                                           Percentage = round(percentage_match, 2)))
+    }
+  }
+  return(comparison_table)
+}
+
+# Methods to compare
+methods <- c("mrcue_fastgwa_coeff", "ivw_plink20_coeff", "iv_plink19_coeff", "iv_plink20_coeff", "iv_fastgwa_coeff")
+
+# Function to print the pairwise comparison table in a cleaner format
+print_comparison_table <- function(table, title) {
+  kable(table, caption = title) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+}
+
+# 1. Unfiltered Data
+unfiltered_table <- pairwise_comparisons(all_mr, methods)
+cat("\n===== Unfiltered Data =====\n")
+print_comparison_table(unfiltered_table, "Unfiltered Data: Matching Signs Between Methods")
+
+# 2. Filtered Data (p < 0.05) - Replace non-significant values with NA
+filtered_data_p <- all_mr %>%
+  mutate(
+    mrcue_fastgwa_coeff = ifelse(mrcue_fastgwa_p >= 0.05, NA, mrcue_fastgwa_coeff),
+    ivw_plink20_coeff = ifelse(ivw_plink20_p >= 0.05, NA, ivw_plink20_coeff),
+    iv_plink19_coeff = ifelse(iv_plink19_p >= 0.05, NA, iv_plink19_coeff),
+    iv_fastgwa_coeff = ifelse(iv_fastgwa_p >= 0.05, NA, iv_fastgwa_coeff),
+    iv_plink20_coeff = ifelse(iv_plink20_p >= 0.05, NA, iv_plink20_coeff)
+  )
+
+filtered_table <- pairwise_comparisons(filtered_data_p, methods)
+cat("\n===== Filtered Data (p < 0.05) =====\n")
+print_comparison_table(filtered_table, "Filtered Data (p < 0.05): Matching Signs Between Methods")
+
+# 3. BH-adjusted p-value < 0.05 filtering - Replace non-significant values with NA
+bh_adjusted_data <- all_mr %>%
+  mutate(
+    mrcue_fastgwa_p_adj = p.adjust(mrcue_fastgwa_p, method = "BH"),
+    ivw_plink20_p_adj = p.adjust(ivw_plink20_p, method = "BH"),
+    iv_plink19_p_adj = p.adjust(iv_plink19_p, method = "BH"),
+    iv_fastgwa_p_adj = p.adjust(iv_fastgwa_p, method = "BH"),
+    iv_plink20_p_adj = p.adjust(iv_plink20_p, method = "BH"),
+    mrcue_fastgwa_coeff = ifelse(mrcue_fastgwa_p_adj >= 0.05, NA, mrcue_fastgwa_coeff),
+    ivw_plink20_coeff = ifelse(ivw_plink20_p_adj >= 0.05, NA, ivw_plink20_coeff),
+    iv_plink19_coeff = ifelse(iv_plink19_p_adj >= 0.05, NA, iv_plink19_coeff),
+    iv_fastgwa_coeff = ifelse(iv_fastgwa_p_adj >= 0.05, NA, iv_fastgwa_coeff),
+    iv_plink20_coeff = ifelse(iv_plink20_p_adj >= 0.05, NA, iv_plink20_coeff)
+  )
+
+bh_filtered_table <- pairwise_comparisons(bh_adjusted_data, methods)
+cat("\n===== BH-adjusted Filtered Data (p < 0.05) =====\n")
+print_comparison_table(bh_filtered_table, "BH-adjusted Filtered Data (p < 0.05): Matching Signs Between Methods")
+```
+
+We can see that without p-value filtering, all the results seem to have decent number of overlappings, but once we filter the results by p < 0.05, the comparisons left reduce to very few. For example, there are 92 significant ROIs using IVW, and 90 significant ROIs using IVreg, only 9 of them are significant in both. 
+
+Conclusion 1: To begin with, not many overlapping between the methods, some ROI significant in one method is not significant in another
+
+Conclusion 2: However, if the ROI is significant in more than 1 methods, its effect direction is quite stable across methods
+
+
+
+### Third, lets run a rank correlation test between the MR results
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+library(dplyr)
+library(corrplot)
+library(ggcorrplot)
+
+coeff_columns <- all_mr %>% 
+  select(mrcue_fastgwa_coeff, ivw_plink20_coeff, iv_plink19_coeff, iv_plink20_coeff, iv_fastgwa_coeff) %>%
+  mutate(across(everything(), as.numeric))
+
+spearman_corr_matrix <- cor(coeff_columns, method = "spearman", use = "pairwise.complete.obs")
+par(cex = 1.0, mar = c(5, 5, 5, 5))  # Adjust margins (bottom, left, top, right)
+corrplot(spearman_corr_matrix, method = "circle", type = "lower", 
+         addCoef.col = "black", tl.col = "black", tl.srt = 45)
+title("Spearman's Correlation Between Coefficients", line = 3)  # Line moves title down
+
+# Filter the data where p-values < 0.05
+filtered_data <- all_mr %>%
+  filter(mrcue_fastgwa_p < 0.05 | ivw_plink20_p < 0.05 | iv_plink19_p < 0.05 | iv_plink20_p < 0.05 | iv_fastgwa_p < 0.05) %>%
+  select(mrcue_fastgwa_coeff, ivw_plink20_coeff, iv_plink19_coeff, iv_plink20_coeff, iv_fastgwa_coeff) %>%
+  mutate(across(everything(), as.numeric))
+
+spearman_corr_filtered <- cor(filtered_data, method = "spearman", use = "pairwise.complete.obs")
+par(cex = 1.0, mar = c(5, 5, 5, 5))
+corrplot(spearman_corr_filtered, method = "circle", type = "lower", 
+         addCoef.col = "black", tl.col = "black", tl.srt = 45)
+title("Spearman's Correlation (Filtered by p < 0.05)", line = 3)
+
+# Adjust p-values using the Benjamini-Hochberg (BH) correction
+bh_adjusted_data <- all_mr %>%
+  mutate(
+    mrcue_fastgwa_p_adj = p.adjust(mrcue_fastgwa_p, method = "BH"),
+    ivw_plink20_p_adj = p.adjust(ivw_plink20_p, method = "BH"),
+    iv_plink19_p_adj = p.adjust(iv_plink19_p, method = "BH"),
+    iv_fastgwa_p_adj = p.adjust(iv_fastgwa_p, method = "BH"),
+    iv_plink20_p_adj = p.adjust(iv_plink20_p, method = "BH")
+  ) %>%
+  filter(mrcue_fastgwa_p_adj < 0.05 | ivw_plink20_p_adj < 0.05 | iv_plink19_p_adj < 0.05 | iv_fastgwa_p_adj < 0.05 | iv_plink20_p_adj < 0.05) %>%
+  select(mrcue_fastgwa_coeff, ivw_plink20_coeff, iv_plink19_coeff, iv_plink20_coeff, iv_fastgwa_coeff) %>%
+  mutate(across(everything(), as.numeric))
+
+spearman_corr_bh_filtered <- cor(bh_adjusted_data, method = "spearman", use = "pairwise.complete.obs")
+par(cex = 1.0, mar = c(5, 5, 5, 5))
+corrplot(spearman_corr_bh_filtered, method = "circle", type = "lower", 
+         addCoef.col = "black", tl.col = "black", tl.srt = 45)
+title("Spearman's Correlation (BH Adjusted p < 0.05)", line = 3)
+
+```
+
+From sign comparison and correlation, we can see that basically results using PLINK align with other results using PLINK, and results using fastGWA align with other fastGWA, but PLINK and fastGWA do not align well
+
+
+### Fourth, let's look at the most significant ROIs
+
+How many ROIs are significant in more than 1 methods, or 2 methods?
+```{r, echo=F, message=FALSE, warning=FALSE}
+library(dplyr)
+library(kableExtra)  # For better table styling
+
+# Step 1: Combine all_mr data with network_df data
+all_mr_network <- all_mr %>% 
+  inner_join(network_df %>% select(roi, LABEL, HEMISPHERE, NETWORK), by = "roi")
+
+# Step 2: Count the number of significant methods for each ROI
+all_mr_network <- all_mr_network %>%
+  mutate(
+    sig_count = ifelse(!is.na(mrcue_fastgwa_p) & mrcue_fastgwa_p < 0.05, 1, 0) +
+                ifelse(!is.na(ivw_plink20_p) & ivw_plink20_p < 0.05, 1, 0) +
+                ifelse(!is.na(iv_plink19_p) & iv_plink19_p < 0.05, 1, 0) +
+                ifelse(!is.na(iv_fastgwa_p) & iv_fastgwa_p < 0.05, 1, 0) +
+                ifelse(!is.na(iv_plink20_p) & iv_plink20_p < 0.05, 1, 0)
+  )
+
+# Step 3: Extract ROIs significant in more than 2 methods
+significant_in_more_than_2_methods <- all_mr_network %>%
+  filter(sig_count > 2) %>%
+  select(roi, LABEL, NETWORK, mrcue_fastgwa_coeff, ivw_plink20_coeff, iv_plink19_coeff, iv_fastgwa_coeff, 
+         iv_plink20_coeff, mrcue_fastgwa_p, ivw_plink20_p, iv_plink19_p, iv_fastgwa_p, iv_plink20_p)
+
+# Step 4: Display the table using kable and kableExtra for better presentation
+kable(significant_in_more_than_2_methods, caption = "ROIs Significant in More than 2 Methods") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+```
+70 ROIs are significant in 2 or more methods, 14 of them are significant in 3 or more methods (shown above), such as: roi301 and 306 (Visual1-02_R-Ctx and Default-25_R-Ctx)
+
+Based on the conclusions those 14 ROIs might be our biggest interest
+
+
+### Fifth, let's look at networks
+
+How many significant ROIs in each Network for each methods?
+```{r, echo=F, message=FALSE, warning=FALSE}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+# Unadjusted significant networks (p < 0.05)
+significant_networks_p <- all_mr_network %>%
+  mutate(
+    mrcue_fastgwa = ifelse(mrcue_fastgwa_p < 0.05, 1, 0),
+    ivw_plink20 = ifelse(ivw_plink20_p < 0.05, 1, 0),
+    iv_plink19 = ifelse(iv_plink19_p < 0.05, 1, 0),
+    iv_plink20 = ifelse(iv_plink20_p < 0.05, 1, 0),
+    iv_fastgwa = ifelse(iv_fastgwa_p < 0.05, 1, 0)
+  ) %>%
+  group_by(NETWORK) %>%
+  summarise(
+    mrcue_fastgwa = sum(mrcue_fastgwa, na.rm = TRUE),
+    ivw_plink20 = sum(ivw_plink20, na.rm = TRUE),
+    iv_plink19 = sum(iv_plink19, na.rm = TRUE),
+    iv_plink20 = sum(iv_plink20, na.rm = TRUE),
+    iv_fastgwa = sum(iv_fastgwa, na.rm = TRUE)
+  )
+
+# Display the unadjusted significant networks table
+print("Number of ROIs significant in each Network by Methods")
+kable(significant_networks_p, caption = "Number of Significant ROIs (p < 0.05) for Each Network by Method") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+# BH-corrected significant networks
+all_mr_network <- all_mr_network %>%
+  mutate(
+    mrcue_fastgwa_p_adj = p.adjust(mrcue_fastgwa_p, method = "BH"),
+    ivw_plink20_p_adj = p.adjust(ivw_plink20_p, method = "BH"),
+    iv_plink19_p_adj = p.adjust(iv_plink19_p, method = "BH"),
+    iv_plink20_p_adj = p.adjust(iv_plink20_p, method = "BH"),
+    iv_fastgwa_p_adj = p.adjust(iv_fastgwa_p, method = "BH")
+  )
+
+significant_networks_bh <- all_mr_network %>%
+  mutate(
+    mrcue_fastgwa = ifelse(mrcue_fastgwa_p_adj < 0.05, 1, 0),
+    ivw_plink20 = ifelse(ivw_plink20_p_adj < 0.05, 1, 0),
+    iv_plink19 = ifelse(iv_plink19_p_adj < 0.05, 1, 0),
+    iv_plink20 = ifelse(iv_plink20_p_adj < 0.05, 1, 0),
+    iv_fastgwa = ifelse(iv_fastgwa_p_adj < 0.05, 1, 0)
+  ) %>%
+  group_by(NETWORK) %>%
+  summarise(
+    mrcue_fastgwa = sum(mrcue_fastgwa, na.rm = TRUE),
+    ivw_plink20 = sum(ivw_plink20, na.rm = TRUE),
+    iv_plink19 = sum(iv_plink19, na.rm = TRUE),
+    iv_plink20 = sum(iv_plink20, na.rm = TRUE),
+    iv_fastgwa = sum(iv_fastgwa, na.rm = TRUE)
+  )
+
+# Display the BH-corrected significant networks table
+print("BH corrected: Number of ROIs significant in each Network by Methods")
+kable(significant_networks_bh, caption = "Number of Significant ROIs (BH-corrected p < 0.05) for Each Network by Method") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+
+Network-wise:
+
+Networks that have many significant ROIs: Default, Cingulo-Opercular, Frontoparietal, Visual2
+
+This is pretty much what we observe previously, those 4 networks are the ones that contain many significant ROIs with causal effect for ADHD
+
+
+```{r, echo=F, eval=F}
+# Filter data where any method has p < 0.05 and compute the mean coefficients
+mean_coefficients_p_filtered <- all_mr_network %>%
+  filter(mrcue_fastgwa_p < 0.05 | ivw_plink20_p < 0.05 | iv_plink19_p < 0.05 | iv_fastgwa_p < 0.05 | iv_plink20_p < 0.05) %>%
+  group_by(NETWORK) %>%
+  summarise(
+    mean_mrcue_fastgwa = mean(mrcue_fastgwa_coeff, na.rm = TRUE),
+    mean_ivw_plink20 = mean(ivw_plink20_coeff, na.rm = TRUE),
+    mean_iv_plink19 = mean(iv_plink19_coeff, na.rm = TRUE),
+    mean_iv_plink20 = mean(iv_plink20_coeff, na.rm = TRUE),
+    mean_iv_fastgwa = mean(iv_fastgwa_coeff, na.rm = TRUE)
+  )
+
+print("Mean beta for each network filtered by p < 0.05")
+print(mean_coefficients_p_filtered)
+
+# First, adjust the p-values using BH correction
+all_mr_network <- all_mr_network %>%
+  mutate(
+    mrcue_fastgwa_p_adj = p.adjust(mrcue_fastgwa_p, method = "BH"),
+    ivw_plink20_p_adj = p.adjust(ivw_plink20_p, method = "BH"),
+    iv_plink19_p_adj = p.adjust(iv_plink19_p, method = "BH"),
+    iv_plink20_p_adj = p.adjust(iv_plink20_p, method = "BH"),
+    iv_fastgwa_p_adj = p.adjust(iv_fastgwa_p, method = "BH")
+  )
+
+# Filter data where any method has BH-corrected p < 0.05 and compute the mean coefficients
+mean_coefficients_bh_filtered <- all_mr_network %>%
+  filter(mrcue_fastgwa_p_adj < 0.05 | ivw_plink20_p_adj < 0.05 | iv_plink19_p_adj < 0.05 | iv_fastgwa_p_adj < 0.05 | iv_plink20_p_adj < 0.05) %>%
+  group_by(NETWORK) %>%
+  summarise(
+    mean_mrcue_fastgwa = mean(mrcue_fastgwa_coeff, na.rm = TRUE),
+    mean_ivw_plink20 = mean(ivw_plink20_coeff, na.rm = TRUE),
+    mean_iv_plink19 = mean(iv_plink19_coeff, na.rm = TRUE),
+    mean_iv_plink20 = mean(iv_plink20_coeff, na.rm = TRUE),
+    mean_iv_fastgwa = mean(iv_fastgwa_coeff, na.rm = TRUE),
+  )
+
+print("BH corrected: Mean beta for each network filtered by p < 0.05")
+print(mean_coefficients_bh_filtered)
+```
