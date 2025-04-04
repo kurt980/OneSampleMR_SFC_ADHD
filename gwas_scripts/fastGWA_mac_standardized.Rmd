@@ -1,0 +1,270 @@
+---
+title: "fastGWA_mac_standardized"
+author: "Chengyan Ji"
+date: "2024-09-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**This is modification after 09/06 Meeting**
+
+Main modifications
+
+- Phenotype
+  - fill NAs with 0
+  - do Fisher's transformation
+  - harmonize
+  
+- bfiles
+  - do not remove NAs this time
+
+## Utilities
+```{r}
+#library(neuroCombat)
+#library(snpStats)
+library(tidyr)
+library(tibble)
+library(dplyr)
+#library(AER)
+library(readxl)
+library(ggplot2)
+library(readr)
+
+### Utilities
+path <- "utilities/"
+
+load(paste0(path, "coupling_cbcl.RData"))
+load(paste0(path, "scfc_coupling_matched.RData"))
+new_fam <- read.table(paste0(path, "acspsw03.txt"), header = T)
+new_fam <- new_fam %>%
+  select(rel_family_id, subjectkey, eventname, race_ethnicity)
+
+CFDRs <- demo_cbcl_base_scfc %>%
+  select(subjectkey, site_id_l, eventname, interview_age, sex, race, ethn) %>%
+  mutate(
+    subjectkey = sub("^(.{4})", "\\1_", subjectkey)  # Add '_' after the 4th character
+    #ethn = as.factor(ethn),  # Convert ethnicity to a factor
+    #race = as.factor(race)   # Convert race to a factor if needed
+  ) %>%
+  inner_join(new_fam, by = c("subjectkey", "eventname")) %>%
+  select(rel_family_id, subjectkey, site_id_l, interview_age, sex, race, ethn, race_ethnicity) %>%
+  rename(fid = rel_family_id, iid = subjectkey) %>%
+  mutate(  # Add underscore to subjectkey
+    race = gsub(" ", "_", race),                      # Replace spaces in 'race'
+    ethn = gsub(" ", "_", ethn)                       # Replace spaces in 'ethnicity'
+  )
+
+# # WE DO NOT remove NAs this time!!!
+# CFDRs <- na.omit(CFDRs) # should have 6208 left
+
+# Fill NAs in race and ethnicity with mode
+calculate_mode <- function(x) {
+  ux <- unique(na.omit(x))  # Remove NA values before finding the mode
+  ux[which.max(tabulate(match(x, ux)))]
+}
+CFDRs$race <- ifelse(is.na(CFDRs$race), calculate_mode(CFDRs$race), CFDRs$race)
+CFDRs$ethn <- ifelse(is.na(CFDRs$ethn), calculate_mode(CFDRs$ethn), CFDRs$ethn)
+
+
+# write new id list to local
+fid_iid_scfc <- CFDRs %>%
+  select(fid, iid)
+write.table(fid_iid_scfc, paste0("bfile/fid_iid_scfc.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+
+## Covariates
+qcovar_age <- CFDRs %>%
+  select(fid, iid, interview_age) %>%
+  arrange(iid)
+covar_sex_race_ethn <- CFDRs %>%
+  select(fid, iid, sex, race, ethn) %>%
+  arrange(iid)
+# Covariate files
+write.table(qcovar_age, paste0("covariates/qcovar_age.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+write.table(covar_sex_race_ethn, paste0("covariates/covar_sex_race_ethn.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+
+
+## Phenotype
+# WE DO NOT USE HARMONIZATION
+SCFC_coup_matrix <- as.data.frame(SCFC_coup %>% unlist() %>% matrix(ncol = 379, byrow = T))
+SCFC_coup_matrix[is.na(SCFC_coup_matrix)] = 0 # 1. Fill NAs with 0
+colnames(SCFC_coup_matrix) <- mmp_subcor
+iid <- c() # Get family id and id; format by adding "-" to scfc ids
+
+# Loop through each ID in the list
+for (id in sub_SC_FC) {
+    # print(id)
+    id_format <- paste0(substring(id, 1, 4), "_", substring(id, 5))
+    iid <- append(iid, id_format) # Append modified ID to the list
+}
+
+SCFC_DF <- data.frame(iid)
+SCFC_DF <- cbind(SCFC_DF, SCFC_coup_matrix)
+ALL_DF <- CFDRs %>%
+  inner_join(SCFC_DF, by = "iid") # This is the big big DF that has everything
+
+### Do Fisher Z Transformation
+# use fisher transformation
+fisher_transform <- function(r, n) {
+  z <- 0.5 * log((1 + r) / (1 - r))
+  z_scaled <- z * sqrt(n - 3)
+  return(z_scaled)
+}
+
+SCFC_coup_matrix_transformed <- apply(SCFC_coup_matrix, 2, function(x) fisher_transform(x, n = 379))
+# harm2_df <- read.csv(paste0(path, "harm2_df.csv"))
+# ROI_HARM2_SCFC_family_covar <- fid_iid_scfc %>% 
+#   inner_join(harm2_df, by="iid")
+
+### HARMONIZATION 
+scfc_matrix <- t(as.matrix(SCFC_coup_matrix_transformed))
+## get covariates matrix
+interview_age = ALL_DF$interview_age
+sex = ALL_DF$sex
+race = ALL_DF$race
+ethn = ALL_DF$ethn
+
+batch <- ALL_DF$site_id_l
+mod <- model.matrix(~interview_age+sex+race+ethn)
+
+#_______________________________________________________________________
+
+data_trans_harm2 <- neuroCombat(dat=scfc_matrix, batch=batch, mod=mod)
+
+## harm2 is harmonized for age, sex race and ethnicity information
+scfc_trans_harm2 <- cbind(fid_iid_scfc, as.data.frame(t(data_trans_harm2$dat.combat)))
+write.csv(scfc_trans_harm2, "utilities/scfc_harm2_sd.csv", row.names = FALSE)
+
+for (i in 1:1) {
+  phenotype_data <- scfc_trans_harm2[, c(1, 2, i + 2)]
+  file_name <- paste0("phenotype_roi/scfc_sd_harm2_family_roi", i, ".phen")
+  write.table(phenotype_data, file = file_name, row.names = F, col.names = F, quote = F)
+  # cat("File", file_name, "has been created.\n")
+}
+```
+
+## bfile
+这次不用去掉NA了，但是还是要改fid
+```{r}
+old_fam <- read.table("bfile/ABCD_all_old.fam")
+colnames(old_fam) <- c("fid", "iid", "pid", "mid", "sex", "phenotype")
+
+new_fam <- old_fam %>%
+  left_join(fid_iid_scfc, by = "iid") %>%
+  mutate(fid = ifelse(is.na(fid.y), fid.x, fid.y)) %>%
+  select(fid, iid, pid, mid, sex, phenotype)
+
+write.table(new_fam, paste0("bfile/ABCD_all.fam"), row.names = F, col.names = F, quote = F, sep = "\t")
+
+
+#现在做subset，做qc试试
+dirpath <- '/Users/kurt/Documents/Data_Science_Project/0906_fastGWA_standardized/'
+plink_path <- "/Users/kurt/Documents/Data_Science_Project/0906_fastGWA_standardized/"
+# Subset by id
+system(paste0(plink_path, "plink --bfile ", dirpath, "bfile/ABCD_all --keep ", dirpath, "bfile/fid_iid_scfc.txt --make-bed --out ", dirpath, "bfile/scfc_all"), intern = FALSE)
+# QC
+system(paste0(plink_path, "plink --bfile ", dirpath, "bfile/scfc_all --geno 0.1 --maf 0.05 --mind 0.1 --make-bed --out ", dirpath, "bfile/scfc_all_qc"), intern = FALSE)
+
+#再做一遍grm和sparse grm
+lib_path <- 'export DYLD_LIBRARY_PATH="/Users/kurt/Documents/Data_Science_Project/gcta-1.94.2-MacOS-ARM-x86_64/gcclib:$DYLD_LIBRARY_PATH"'
+system(lib_path, intern = TRUE)  # Set library path
+system(
+  paste0(dirpath, "gcta64 ",
+      "--bfile ", dirpath, "bfile/scfc_all_qc ",
+      "--autosome  --make-grm  ", 
+      "--thread-num 16 ",
+      "--out ", dirpath, "bfile/scfc_all_qc_out"), 
+      intern = F)
+system(
+  paste0(dirpath, "gcta64 ",
+      "--grm ", dirpath, "bfile/scfc_all_qc_out ",
+      "--make-bK-sparse 0.05 ",
+      "--thread-num 16 ",
+      "--out ", dirpath, "bfile/scfc_all_qc_sp_out"), 
+      intern = F)
+```
+
+## fastGWA
+
+```{r}
+sample <- 379
+
+library(stringr)
+files <- list.files(path = paste0(dirpath, 'phenotype_roi'))
+phens <- files[stringr::str_detect(files, "\\.phen$")]
+file_pairs <- setNames(paste0('fastGWA_default_allcovar_', sub("\\.phen$", "", phens)), phens)
+# print(length(file_pairs))
+# print(file_pairs)
+
+lib_path <- 'export DYLD_LIBRARY_PATH="/Users/kurt/Documents/Data_Science_Project/gcta-1.94.2-MacOS-ARM-x86_64/gcclib:$DYLD_LIBRARY_PATH"'
+system(lib_path, intern = TRUE)  # Set library path
+
+readme_path <- paste0(dirpath, "gwas_results/fastGWA_default_allcovar/readme.txt")
+readme_conn <- file(readme_path, "w")
+writeLines("Commands run for FastGWA analysis:", readme_conn)
+start_time <- Sys.time()
+
+for (idx in seq_along(file_pairs)) {
+  if (idx <= 1) {
+    phenotype_file <- names(file_pairs)[idx]
+    out_file <- file_pairs[[idx]]
+    
+    command <- paste0(dirpath,
+                      "gcta64 ",
+                      "--bfile ", dirpath, "bfile/scfc_all_qc ",
+                      "--grm-sparse ", dirpath, "bfile/scfc_all_qc_sp_out ",
+                      "--fastGWA-mlm ",
+                      "--pheno ", dirpath, "phenotype_roi/", phenotype_file, " ",
+                      "--qcovar ", dirpath, "covariates/qcovar_age.txt ",
+                      "--covar ", dirpath, "covariates/covar_sex_race_ethn.txt ",
+                      "--thread-num 16 ",
+                      "--out ", dirpath, "gwas_results/fastGWA_default_allcovar/", out_file
+               )
+    
+    system(command, intern = FALSE)
+    writeLines(command, readme_conn, useBytes = TRUE)
+    
+    cat("\n\nfastGWA(default filter and all covariates) for residuals command executed successfully for the phenotype file:", phenotype_file, "\n\n\n")
+  }
+}
+
+end_time <- Sys.time()
+total_duration <- difftime(end_time, start_time, units = "mins")
+
+writeLines(sprintf("Total time to run all commands: %s minutes", total_duration), readme_conn)
+writeLines("End of command list.", readme_conn)
+close(readme_conn)
+
+
+### 读取数据
+readme_path <- paste0(dirpath, "gwas_results/fastGWA_default_allcovar/fastGWA_default_allcovar_csv/readme.txt")
+readme_conn <- file(readme_path, "w")
+writeLines("fastGWA using GCTA\n default filter\n using all covariates\n\n\n\n\n", readme_conn)
+writeLines(paste0("Commands run for FastGWA analysis: ", command, "\n\n"), readme_conn)
+
+start_time <- Sys.time()
+
+missing <- 0
+for (i in 69:sample) {
+  filename <- paste0(dirpath, "gwas_results/fastGWA_default_allcovar/fastGWA_default_allcovar_scfc_sd_harm2_family_roi", i, ".fastGWA")
+  
+  if (file.exists(filename)) {
+    qassoc_data <- read.table(filename, header = TRUE, sep = "")
+    output_filename <- paste0(dirpath, "gwas_results/fastGWA_default_allcovar/fastGWA_default_allcovar_csv/fastGWA_roi", i, ".csv")
+    write.csv(qassoc_data, output_filename, row.names = FALSE, quote = FALSE)
+  } else {
+    missing = missing + 1
+    writeLines(paste0("Missing file for ROI ", i, ": ", filename), readme_conn)
+    cat("File does not exist: ", filename, "\n")  # Print message to the console as well
+  }
+}
+
+end_time <- Sys.time()
+total_duration <- difftime(end_time, start_time, units = "mins")
+
+writeLines(sprintf("Total time to process all files: %s minutes", total_duration), readme_conn)
+writeLines(paste("Total missing files:", missing), readme_conn)
+close(readme_conn)
+```

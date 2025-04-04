@@ -1,0 +1,158 @@
+---
+title: "association_analysis"
+author: "Chengyan Ji"
+date: "2024-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# # Install necessary packages
+# install.packages("energy")       # For distance correlation
+# install.packages("infotheo")     # For mutual information
+# install.packages("WGCNA")        # For biweight midcorrelation
+# install.packages("Hmisc")        # For Hoeffding's D
+# install.packages("minerva")      # For MIC
+```
+
+**10/21: 这次用distance correlation研究ADHD和SCFC的相关性**
+**10/21: writing csv to local, will cause the "-" in column names to become ".", need to sub**
+**10/22: Use parallel computing**
+**02/25: Redo on unrelated samples**
+
+## Read Data
+```{r}
+library(foreach)
+library(doParallel)
+library(snpStats)
+library(tibble)
+library(dplyr)
+library(AER)
+library(readxl)
+library(ggplot2)
+library(energy)     # For distance correlation
+library(infotheo)   # For mutual information
+library(Hmisc)      # For Hoeffding's D
+library(minerva)    # For MIC
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_bfile/"
+cov_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Covariates/"
+harm_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Harmonized_scfc/"
+pheno_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Phenotype/"
+tool_path <- "/Users/grc8mu/Desktop/DS/Tools/"
+
+directory <- "/Users/grc8mu/Desktop/DS/1021_DistanceCorr/"
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+
+## 20250225: GET UNRELATED SAMPLES!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+bfile_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_bfile/bfile_for_gwas_comparison/scfc_all_qc_unrelated"
+
+bfile_fam <- read.table(paste0(bfile_path, ".fam")) %>%                           # get current bfile fam id
+  select(V1, V2) %>%
+  rename(fid = V1, iid = V2)
+```
+
+
+## Distance correlation, using raw SCFC, harmonized SCFC, and fisher-harmonized SCFC
+
+```{r}
+dsm5 <- demo_cbcl_base_scfc %>%
+  select(subjectkey, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_somaticpr_t, cbcl_scr_dsm5_adhd_t, cbcl_scr_dsm5_opposit_t, cbcl_scr_dsm5_conduct_t) %>%
+  rename(iid = subjectkey) %>%
+  mutate(iid = sub("^(.{4})", "\\1_", iid))
+
+# Load SCFC ROIs
+csv_files <- list.files(path = paste0(harm_path, ""), pattern = "^scfc.*\\.csv$", full.names = FALSE)
+combined_results <- list()
+
+# Function to handle NA values and calculate distance correlation for complete cases
+calculate_distance_corr <- function(vec1, vec2) {
+  complete_indices <- complete.cases(vec1, vec2)
+  test <- dcor.test(vec1[complete_indices], vec2[complete_indices], R = 1000)
+  return(c(correlation = test$statistic, p_value = test$p.value))  # Return both statistic and p-value
+}
+
+# Loop through the SCFC CSV files
+scfc_csv <- csv_files[6]
+print(scfc_csv)
+
+scfc <- read.csv(paste0(harm_path, "", scfc_csv))
+df <- dsm5 %>%
+  select(iid, cbcl_scr_dsm5_adhd_t) %>%
+  rename(adhd = cbcl_scr_dsm5_adhd_t) %>%
+  inner_join(scfc, by = "iid") %>%
+  inner_join(bfile_fam, by = c("fid", "iid")) # ONLY UNReLATED
+
+adhd <- as.vector(df$adhd)
+ROIs <- as.matrix(df[, 4:382])  # starting from column 4
+
+# create ROI number corresponding to name
+roi_numbers <- 1:379
+roi_df <- data.frame(
+  roi_num = roi_numbers,
+  roi = paste0("roi", roi_numbers),      # The numeric sequence
+  ROI = colnames(ROIs)    # The list of ROI names
+)
+
+#=============================================================================
+# Distance Correlation
+# Parallel Computing
+num_cores <- detectCores()
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+distance_results <- foreach(i = 1:379, .combine = 'rbind', .packages = 'energy') %dopar% { # ncol(ROIs)
+  test <- calculate_distance_corr(ROIs[, i], adhd)
+  return(test)
+}
+stopCluster(cl)
+```
+
+```{r}
+# Convert the results into a data frame
+distance_df <- data.frame(
+  ROI = colnames(ROIs),
+  coeff_distance = data.frame(distance_results)[, "correlation.dCor"],  # Extract correlation
+  p_value_distance = data.frame(distance_results)[, "p_value"]     # Extract p-value
+) %>%
+  inner_join(roi_df, by = "ROI") %>%
+  select(roi, ROI, coeff_distance, p_value_distance)
+
+if (!dir.exists(paste0(directory, "distance/"))) {
+  dir.create(paste0(directory, "distance/"), recursive = FALSE)
+}
+write.csv(distance_df, paste0(directory, "distance/adhd_distance_results_unrel_", sub("^scfc_(.*)\\.csv$", "\\1", basename(scfc_csv)), ".csv"), row.names = FALSE)
+#=============================================================================
+# # Merge all results into one data frame by ROI
+# combined_df <- Reduce(function(x, y) merge(x, y, by = c("ROI", "roi"), all = TRUE),
+#                       list(distance_df)) %>% arrange(roi)
+# 
+# combined_results[[scfc_csv]] <- combined_df %>% arrange(roi) # Add the combined results for this file to the list
+# write.csv(combined_df, paste0(directory, "adhd_combined_association_results_", sub("^scfc_(.*)\\.csv$", "\\1", basename(scfc_csv)), ".csv"), row.names = F)
+#}
+
+# final_combined_df <- do.call(rbind, combined_results) # Combine all results from all files into a single data frame
+# final_combined_df <- final_combined_df[ , !duplicated(names(final_combined_df))] %>% arrange(roi)
+# write.csv(final_combined_df, paste0(directory, "all_adhd_combined_association_results.csv"), row.names = F) # save the final combined results to a single CSV file
+
+```
+
+
+```{r}
+dff <- na.omit(df[,c(1,2,3,4)])
+# Example vectors
+x <- dff$L_V1_ROI  # Random vector of 100 normal values
+y <- dff$adhd  # Another random vector of 100 normal values
+
+# Compute distance correlation and p-value
+result <- dcor.test(x, y, R = 150)
+
+# Check the result
+print(result)
+
+```

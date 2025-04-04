@@ -1,0 +1,241 @@
+---
+title: "association_adhd_plot"
+author: "Chengyan Ji"
+date: "2024-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+10/22: plot distance correlation
+
+## Read results and plot on brain regions
+```{r}
+## Plot ROIs on brain regions
+########## Brain Visualization #########
+library(ggseg)
+library(ggplot2)
+library(dplyr)
+### glasser atlas ########
+### The first 360 regions of interest (ROIs) are from the Glasser atlas
+### We will use ggsegGlasser to visulize them
+library(ggsegGlasser)
+
+### Load Utilities, data, tool and define directory
+utilities_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_SCFC_utilities/"
+bfile_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/ABCD_bfile/"
+cov_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Covariates/"
+harm_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Harmonized_scfc/"
+pheno_path <- "/Users/grc8mu/Desktop/DS/ABCD_data/Phenotype/"
+tool_path <- "/Users/grc8mu/Desktop/DS/Tools/"
+
+directory <- "/Users/grc8mu/Desktop/DS/1021_DistanceCorr/"
+load(paste0(utilities_path, "coupling_cbcl.RData"))
+load(paste0(utilities_path, "scfc_coupling_matched.RData"))
+
+# Load correlation results
+csv_files <- list.files(path = paste0(directory, ""), pattern = "^adhd_combined_association_results_*\\.csv$", full.names = FALSE)
+```
+
+```{r}
+library(stringr)
+mmp <- mmp_subcor[1:360] %>% str_remove(.,'_ROI') # remember to read coupling_cbcl.RData
+
+methods <- c("distance")
+phenos <- c("trans_harm2") # c("raw", "harm1", "harm2", "trans_harm1", "trans_harm2")
+
+for (method in methods) {
+  for (pheno in phenos) {
+# method <- "pearson"
+# pheno <- "harm1"
+  association_results <- paste0(method, "/adhd_", method, "_results_", pheno, "perm=10000.csv")
+
+    assoc_df <- read.csv(paste0(directory, association_results)) %>% mutate(ROI = paste0("roi", roi))
+    ############################################################################
+    roi_glasser <- mmp %>% str_split(.,"_",simplify = TRUE) %>% data.frame()
+    colnames(roi_glasser) <- c("hemi","region")
+    roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+    roi_glasser <- roi_glasser %>%
+      tibble::rownames_to_column(var = "ROI") %>%
+      mutate(ROI = paste0("roi", ROI))
+    roi_glasser <- roi_glasser %>%
+      inner_join(assoc_df, by = "ROI")  # ROI is name
+  
+    #===========================================================================
+    gldata <- tibble(
+      label = roi_glasser$label,
+      Estimate = roi_glasser[,6]
+    )
+    
+    ### cortical_position (i.e., how do we want the brain to be positioned)
+    cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+    ### choose color palette
+    library(RColorBrewer)
+    # display.brewer.all()
+    color <- rev(brewer.pal(11, 'RdBu'))
+    library(scales)
+    # show_col(color)
+    
+    ### plot the coupling value in brain
+    plot <- gldata %>%
+      ggplot() +
+      geom_brain(atlas = glasser, 
+                 position = position_brain(side ~ hemi), ### there is different options like "horizontal", "side ~ hemi" "cortical_pos"
+                 aes(fill = Estimate)) + scale_fill_gradient2(low = muted("blue4"),
+                                                              # mid = "gre",
+                                                              high = muted("coral3"), #midpoint = 0.05, 
+                                                              na.value = "#d6d6d6")+ggtitle("Glasser")+
+      theme_bw() +
+      theme(text = element_text(size = 10)) +
+      theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+      theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm')) + theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+    
+    if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+      dir.create(paste0(directory, "visualization/"), recursive = F)
+      dir.create(paste0(directory, method, "/"), recursive = F)
+    }
+    ggsave(paste0(directory, paste0("visualization/adhd_assoc_", method, "_", pheno, "_glasser_2x2", "perm=10000.png")), plot = plot, width = 10, height = 8, dpi = 300)
+    
+    #=============================================================================
+    #### Get all data
+    subcor <- mmp_subcor[361:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+    colnames(subcor) <- c('region','hemi')
+
+    subcor <- subcor %>%
+      tibble::rownames_to_column(var = "ROI") %>%
+      mutate(ROI = paste0("roi", as.numeric(ROI) + 360)) %>%
+      slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+    aseg$data$label
+    subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+    subcor$label[19] <- 'Brain-Stem'
+    subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+    subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+    subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+    # Joining roi_glasser with assoc_df to align data
+    subcor <- subcor %>%
+      inner_join(assoc_df, by = "ROI")  # ROI is name
+
+    gldata <- tibble(
+      label = subcor$label,
+      Estimate = subcor[,6]
+    )
+    plot <- gldata %>%
+        #group_by(groups) %>%
+        ggplot() +
+        geom_brain(atlas = aseg, aes(fill = Estimate))+
+        scale_fill_gradient2(low = muted("blue4"),
+                             mid = "white",
+                             high = muted("coral3"),midpoint = 0, na.value = "#d6d6d6")+
+        #ggtitle(paste(y_annot[i]))+
+        theme_bw() +
+        theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+        theme(text = element_text(size = 15)) +
+        theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm')) + theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+    if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+      dir.create(paste0(directory, "visualization/"), recursive = F)
+      dir.create(paste0(directory, method, "/"), recursive = F)
+    }
+    ggsave(paste0(directory, paste0("visualization/adhd_assoc_", method, "_", pheno, "_glasser19_2x2", "perm=10000.png")), plot = plot, width = 10, height = 8, dpi = 300)
+    
+    ############################################################################
+    # filter by p-value (right now 005, BH, 1022, but using 0.1)
+    assoc_df <- assoc_df %>%
+      mutate(bh_pval = p.adjust(.[, 4], method = "BH")) %>%
+      filter(bh_pval < 0.05)
+    roi_glasser <- mmp %>% str_split(.,"_",simplify = TRUE) %>% data.frame()
+    colnames(roi_glasser) <- c("hemi","region")
+    roi_glasser <- roi_glasser %>% mutate(label=ifelse(hemi=='L',paste0("lh_L_",region), paste0("rh_R_",region)))
+    roi_glasser <- roi_glasser %>%
+      tibble::rownames_to_column(var = "ROI") %>%
+      mutate(ROI = paste0("roi", ROI))
+    roi_glasser <- roi_glasser %>%
+      inner_join(assoc_df, by = "ROI")  # ROI is name
+    
+    #===========================================================================
+    gldata <- tibble(
+      label = roi_glasser$label,
+      Estimate = roi_glasser[,6]
+    )
+    
+    ### cortical_position (i.e., how do we want the brain to be positioned)
+    cortical_pos <- c("left lateral", "right lateral","left medial","right medial")
+    ### choose color palette
+    library(RColorBrewer)
+    # display.brewer.all()
+    color <- rev(brewer.pal(11, 'RdBu'))
+    library(scales)
+    # show_col(color)
+    
+    ### plot the coupling value in brain
+    plot <- gldata %>%
+      ggplot() +
+      geom_brain(atlas = glasser, 
+                 position = position_brain(side ~ hemi), ### there is different options like "horizontal", "side ~ hemi"
+                 aes(fill = Estimate)) + scale_fill_gradient2(low = muted("blue4"),
+                                                              # mid = "gre",
+                                                              high = muted("coral3"), #midpoint = 0.05, 
+                                                              na.value = "#d6d6d6")+ggtitle("Glasser")+
+      theme_bw() +
+      theme(text = element_text(size = 10)) +
+      theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+      theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+    
+    if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+      dir.create(paste0(directory, "visualization/"), recursive = F)
+      dir.create(paste0(directory, method, "/"), recursive = F)
+    }
+    ggsave(paste0(directory, paste0("visualization/adhd_assoc_", method, "_", pheno, "_005bh_glasser_2x2", "perm=10000.png")), plot = plot, width = 10, height = 8, dpi = 300)
+    
+    #=============================================================================
+    #### Get all data
+    subcor <- mmp_subcor[361:379] %>% str_remove(.,'_ROI') %>% str_split(.,'_',simplify = T) %>%as.data.frame()
+    colnames(subcor) <- c('region','hemi')
+
+    subcor <- subcor %>%
+      tibble::rownames_to_column(var = "ROI") %>%
+      mutate(ROI = paste0("roi", as.numeric(ROI) + 360)) %>%
+      slice((n() - 18):n())  # 或者使用 tail(subcor, 19)，其实不用，只是验证
+
+    aseg$data$label
+    subcor$label <- paste0(str_to_title(subcor[,'hemi']), '-',str_to_title(subcor[,'region']))
+    subcor$label[19] <- 'Brain-Stem'
+    subcor$label[subcor$region=='thalamus'] <- paste0(subcor$label[subcor$region=='thalamus'],'-','Proper')
+    subcor$label[subcor$region=='diencephalon'] <- paste0(str_to_title(subcor$hemi[subcor$region=='diencephalon']),'-VentralDC')
+    subcor$label[subcor$region=='cerebellum'] <- paste0(subcor$label[subcor$region=='cerebellum'],'-','Cortex')
+
+    # Joining roi_glasser with assoc_df to align data
+    subcor <- subcor %>%
+      inner_join(assoc_df, by = "ROI")  # ROI is name
+
+    gldata <- tibble(
+      label = subcor$label,
+      Estimate = subcor[,6]
+    )
+    plot <- gldata %>%
+        #group_by(groups) %>%
+        ggplot() +
+        geom_brain(atlas = aseg, aes(fill = Estimate))+
+        scale_fill_gradient2(low = muted("blue4"),
+                             mid = "white",
+                             high = muted("coral3"),midpoint = 0, na.value = "#d6d6d6")+
+        #ggtitle(paste(y_annot[i]))+
+        theme_bw() +
+        theme(panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_blank())+
+        theme(text = element_text(size = 15)) +
+        theme(legend.position = 'bottom') + theme(legend.key.size = unit(1, 'cm'))
+
+    if (!dir.exists(paste0(directory, "visualization/"))) { # Save the plot to a file
+      dir.create(paste0(directory, "visualization/"), recursive = F)
+      dir.create(paste0(directory, method, "/"), recursive = F)
+    }
+    ggsave(paste0(directory, paste0("visualization/adhd_assoc_", method, "_", pheno, "_005bh_glasser19_2x2", "perm=10000.png")), plot = plot, width = 10, height = 8, dpi = 300)
+  }
+} 
+```
+
+

@@ -1,0 +1,183 @@
+---
+title: "gwas_unrelated_mac_standardized"
+author: "Chengyan Ji"
+date: "2024-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- **一个小插曲：上次跑的时候文件名字写错了，跑之前先跑一下下面的代码把名字改回来** -->
+<!-- ```{r} -->
+<!-- dir_path <- "phenotype_roi/" -->
+<!-- files <- list.files(path = dir_path, pattern = "_covar", full.names = TRUE) -->
+<!-- new_files <- gsub("_covar", "", files) -->
+<!-- results <- file.rename(from = files, to = new_files) -->
+<!-- ``` -->
+
+**This is modification after 09/06 Meeting**
+**09/20: I now run gwas for ALL ROIs**
+**09/20: 2 GWAS slightly different, susepect becasue 5628 ids not same every time, not using phenotype and bfile from 0906**
+**09/30: Redo GWAS using Plink2.0 on unrelated data and noqc data, with covariates**
+**10/01: found mistake, did not remove qc so redo**
+
+```{r}
+#library(snpStats)
+library(tidyr)
+library(tibble)
+library(dplyr)
+#library(AER)
+library(readxl)
+library(ggplot2)
+library(readr)
+```
+
+## **GWAS using PLINK2.0 (on unrelated data)**
+
+Main modifications
+
+- 1 individual per family
+- Phenotype
+  - fill NAs with 0
+  - do Fisher's transformation
+  - harmonize
+  
+- bfiles
+  - do not remove NAs this time
+  - NOT QCed
+
+<!-- - Only do GWAS for ROIs with no fastGWA results -->
+<!-- ### Need to get the ROIs with no fastGWA results -->
+
+<!-- # ```{r} -->
+<!-- # readme_path <- "/Users/kurt/Documents/Data_Science_Project/0906_fastGWA_standardized/gwas_results_0906/fastGWA_default_allcovar/fastGWA_default_allcovar_csv/readme.txt"  # Update this path to your actual file path -->
+<!-- # readme_content <- readLines(readme_path) -->
+<!-- # pattern <- "Missing file for ROI (\\d+):" -->
+<!-- # missing <- regmatches(readme_content, gregexpr(pattern, readme_content)) -->
+<!-- # missing <- sapply(missing, function(x) as.numeric(gsub(pattern, "\\1", x))) -->
+<!-- # missing <- unlist(missing) -->
+<!-- # missing <- missing[!is.na(missing)]  # Remove NA values that result from lines without matches -->
+<!-- # ``` -->
+  
+### Get unrelated ids (one from each family) and create phenotype and covariates
+```{r}
+phenotype_temp <- read.table("phenotype_roi/scfc_sd_harm2_family_roi1.phen") %>% rename(fid=V1, iid=V2, phenotype=V3)
+fid_iid_scfc <- phenotype_temp[,c(1,2)]
+fid_iid_scfc_unrelated <- fid_iid_scfc %>%
+  group_by(fid) %>%
+  slice_sample(n = 1) %>%
+  ungroup() %>%
+  arrange(iid)
+
+write.table(fid_iid_scfc_unrelated, paste0("bfile/fid_iid_scfc_unrelated.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+# inspect, should be 5628(5487 after removing covar, but not here)
+length(unique(read.table(paste0("bfile/fid_iid_scfc_unrelated.txt"))[,1]))
+
+## get covariates
+qcovar_age_unrelated <- read.table(paste0("covariates/qcovar_age.txt")) %>% rename(fid=V1, iid=V2) %>%
+  inner_join(fid_iid_scfc_unrelated, by = c("fid", "iid"))
+covar_sex_race_ethn_unrelated <- read.table(paste0("covariates/covar_sex_race_ethn.txt")) %>% rename(fid=V1, iid=V2) %>%
+  inner_join(fid_iid_scfc_unrelated, by = c("fid", "iid"))
+covar_all <- qcovar_age_unrelated %>%
+  inner_join(covar_sex_race_ethn_unrelated, by = c("fid", "iid"))
+
+## loop to get phenotype unrelated subset
+for (i in 1:379) {
+  phenotype_data <- read.table(paste0("phenotype_roi/scfc_sd_harm2_family_roi", i, ".phen")) %>% rename(fid=V1, iid=V2) %>%
+    inner_join(fid_iid_scfc_unrelated, by = c("fid", "iid"))
+  file_name <- paste0("phenotype_roi/scfc_unrelated_sd_harm2_family_roi", i, ".phen")
+  write.table(phenotype_data, file = file_name, row.names = F, col.names = F, quote = F)
+  # cat("File", file_name, "has been created.\n")
+}
+
+# Covariate files
+write.table(qcovar_age_unrelated, paste0("covariates/qcovar_age.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+write.table(covar_sex_race_ethn_unrelated, paste0("covariates/covar_sex_race_ethn.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+write.table(covar_all, paste0("covariates/covar_all_unrelated.txt"), col.names = F, row.names = F, quote = F, sep = "\t")
+```
+
+### Subset again based on unrelated iids (use PLINK1.9)
+`plink --bfile scfc_all --keep fid_iid_scfc_unrelated.txt --make-bed --out scfc_all_covar_unrelated`
+```{r}
+old_fam <- read.table("bfile/ABCD_all_old.fam")
+colnames(old_fam) <- c("fid", "iid", "pid", "mid", "sex", "phenotype")
+
+new_fam <- old_fam %>%
+  left_join(fid_iid_scfc_unrelated, by = "iid") %>%
+  mutate(fid = ifelse(is.na(fid.y), fid.x, fid.y)) %>%
+  select(fid, iid, pid, mid, sex, phenotype)
+
+write.table(new_fam, paste0("bfile/ABCD_all.fam"), row.names = F, col.names = F, quote = F, sep = "\t")
+
+#现在做subset，做qc试试
+parent_path <- '/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/'
+dirpath <- '/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/'
+plink_path <- "/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/"
+# Subset by id
+system(paste0(plink_path, "plink --bfile ", parent_path, "bfile/ABCD_all --keep ", dirpath, "bfile/fid_iid_scfc_unrelated.txt --make-bed --out ", dirpath, "bfile/scfc_all_unrelated"), intern = FALSE)
+# NO QC
+# system(paste0(plink_path, "plink --bfile ", dirpath, "bfile/scfc_all_unrelated --geno 0.1 --maf 0.05 --mind 0.1 --make-bed --out ", dirpath, "bfile/scfc_all_unrelated"), intern = FALSE)
+
+# #再做一遍grm和sparse grm
+# lib_path <- 'export DYLD_LIBRARY_PATH="/Users/kurt/Documents/Data_Science_Project/gcta-1.94.2-MacOS-ARM-x86_64/gcclib:$DYLD_LIBRARY_PATH"'
+# system(lib_path, intern = TRUE)  # Set library path
+# system(
+#   paste0(plink_path, "gcta64 ",
+#       "--bfile ", dirpath, "bfile/scfc_all_unrelated_qc ",
+#       "--autosome  --make-grm  ", 
+#       "--thread-num 16 ",
+#       "--out ", dirpath, "bfile/scfc_all_unrelated_qc_out"), 
+#       intern = F)
+# system(
+#   paste0(plink_path, "gcta64 ",
+#       "--grm ", dirpath, "bfile/scfc_all_unrelated_qc_out ",
+#       "--make-bK-sparse 0.05 ",
+#       "--thread-num 16 ",
+#       "--out ", dirpath, "bfile/scfc_all_unrelated_qc_sp_out"), 
+#       intern = F)
+```
+
+### Do GWAS on PLINK2.0 --linear with --covar
+```{r}
+library(stringr)
+
+files <- list.files(paste0(dirpath, "phenotype_roi/"))
+phens <- files[str_detect(files, "\\.phen$")]
+file_pairs <- setNames(paste0('gwas_', sub("\\.phen$", "", phens)), phens)
+
+# print(length(file_pairs))
+# print(file_pairs)
+
+missing <- c(1:379)
+for (phenotype_file in names(file_pairs)) {
+  roi_i <- as.numeric(gsub(".*roi(\\d+)\\.phen", "\\1", phenotype_file))
+  if (roi_i %in% missing) {
+    out_file <- file_pairs[phenotype_file]
+    # Define the path to the covariate file
+    covar_path <- paste0(dirpath, "covariates/covar_all_unrelated.txt")
+    command <- paste0(
+        plink_path, "plink2 --bfile ", "/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/bfile/scfc_all_unrelated ",   #dirpath, "bfile/scfc_all_unrelated_qc ",
+        "--pheno ", "/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/", "phenotype_roi/", phenotype_file, " ",
+        "--covar ", "/Users/kurt/Documents/Data_Science_Project/0930_GWASplink20_standardized_noqc/covariates/covar_all_unrelated.txt", " ",
+        "--glm no-x-sex hide-covar ",  # Added hide-covar to avoid covariate effect lines in the output
+        "--covar-variance-standardize ",
+        "--out ", dirpath, "gwas_results/", out_file
+    )
+    system(command)
+    cat("GWAS command executed successfully for the phenotype file:", phenotype_file, "\n")
+  }
+}
+```
+
+### Read PLINK2.0 GWAS results
+```{r}
+for (i in missing) {
+  filename <- paste0(dirpath, "gwas_results/gwas_scfc_unrelated_sd_harm2_family_roi", i, ".PHENO1.glm.linear")
+  qassoc_data <- read.table(filename, header = F, sep = "\t")
+  colnames(qassoc_data) <- c("#CHROM", "POS", "SNP", "REF", "ALT", "PROVISIONAL_REF?", "A1", "OMITTED", "A1_FREQ", "TEST", "OBS_CT", "BETA", "SE", "T_STAT", "P", "ERRCODE") # manually assign column names
+  output_filename <- paste0(dirpath, "/gwas_results/gwas_unrelated_csv/gwas_scfc_unrelated_sd_harm2_family_roi", i, ".csv")
+  write.csv(qassoc_data, output_filename, row.names = FALSE, quote = FALSE)
+}
+```

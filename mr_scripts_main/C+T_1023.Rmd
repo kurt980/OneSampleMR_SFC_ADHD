@@ -1,0 +1,265 @@
+---
+title: "C+T_1009"
+author: "Chengyan Ji"
+date: "2024-10-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**10/23: This is C+T for Reverse MR**
+**10/23: This task uses the new directory system**
+**10/23: Structure: bfile_by_chr --> Thresholding(pvalthr) --> save results(pvalthr) --> clumping(pvalthr)**
+**10/23: Will introduce duplicates if all content not removed before running**
+**10/23: Current readme in C+Ted folder will only show dsm5s with no significant SNPs after C+T, but not show which dsm5 has no GWAS results, please original GWAS folder readme**
+**10/24: Modify to do C+T for GWASplink1.9**
+
+```{r}
+library(optparse)
+library(parallel)
+library(readr)
+library(bigreadr)
+library(bigsnpr)
+library(data.table)
+library(dplyr)
+library(metafor)
+library(foreach)
+library(doParallel)
+
+### Define directories==========================================================
+in_dir <- "/Users/kurt/Documents/Data_Science_Project/1023_GWAS_DSM5/"
+directory <- "/Users/kurt/Documents/Data_Science_Project/1023_ReverseMR/"
+plink_path <- paste0("/Users/kurt/Documents/Data_Science_Project/Tools/", "plink")
+bfile_path <- paste0("/Users/kurt/Documents/Data_Science_Project/ABCD_data/", "ABCD_bfile/bfile_for_gwas_comparison/")
+
+### Set Parameters==============================================================
+# Input:
+NCORES = 1 # Number of cores used for training lassosum2 models under different tuning parameter settings.
+# Parameters for the Clumping step
+kb = 500 # SNPs within 500kb of the index SNP are considered for clumping
+p.ldclump = 0.5 # LD p-value threshold for a SNP to be included as an index SNP
+pvalthrs = c(5e-08) #c(5e-06, 5e-07, 5e-08) # p-value threshold for thresholding
+r2 = 0.001 # SNPs having r2 higher than 0.1 with the index SNPs will be removed # optional: c(0.1,0.2,0.4,0.6,0.8)
+
+trait_name <- "adhd" ## This is here used
+method <- 'method' ## I AM NOT SURE WHAT THIS IS ## there was a variable called "method" but never used in the original code
+ite <- 1 ## I AM NOT SURE WHAT THIS IS
+
+#========================================================================================================================  
+#========================================================================================================================  
+
+QCs <- c("_qc") # qc and no qc: "_noqc"
+unrels <- c("", "_unrelated") #c("_unrelated") # all obs and unrelated obs
+# harms <- c("_sd_harm2") # harm2 and fisher+harm2
+methods <- c("dsm5_gwasplink19", "dsm5_gwasplink20") # c("gwasplink20_covsex", "dsm5_fastGWA_covsex")
+dsm5s <- c("adhd") #c("depress", "anxdisord", "somaticpr", "adhd", "opposit", "conduct")
+
+################################################### For Loop 1 Begins ###################################################
+for (qc in QCs) {
+  for (unrel in unrels) {
+    #-----------get bfile---------------------------------------------------------
+    bfile <- paste0(bfile_path, "scfc_all", qc, unrel)
+
+      for (method in methods) {
+        #------------------Get directory for storing GWAS results---------------
+        gwas_dir <- paste0(in_dir, method, qc, unrel, "/gwas_results_csv/")
+        #------------------Set up directory to save MR results------------------
+        work_dir <- paste0(directory, method, qc, unrel, "_ReverseMR/")
+        if (!dir.exists(work_dir)) { dir.create(work_dir, recursive = F) }
+        #=============Create directories for C+T========================================
+        #-------------1st level directories---------------------------------------------
+        # 1.1: for storing bfile by chr, same for all pvalthr
+        if (!dir.exists(paste0(work_dir, "bfile_by_chr/"))) { dir.create(paste0(work_dir, "bfile_by_chr/"), recursive = F) }
+        # 1.2: for storing C+T results (contain parallel Thresholding, Clumping and C+T directories)
+        ct_results_path <- paste0(work_dir, "C+T/") 
+        if (!dir.exists(ct_results_path)) { dir.create(ct_results_path, recursive = F) }
+        # 1.3: beneath C+T/: Thresholding, Clumping and C+T
+        thresh_path <- paste0(work_dir, "C+T/Thresholding/") # 1.3.1: Thresholding results
+        if (!dir.exists(thresh_path)) { dir.create(thresh_path, recursive = F) }
+        clumping_path <- paste0(work_dir, "C+T/Clumping/")   # 1.3.2: Clumping results
+        if (!dir.exists(clumping_path)) { dir.create(clumping_path, recursive = F) }
+        ct_path <- paste0(work_dir, "C+T/C+Ted_", method, qc, unrel, "/")            # 1.3.3: Processed C+T results containing SNP and test results
+        if (!dir.exists(ct_path)) { dir.create(ct_path, recursive = F) }
+        
+        ## I. Break geno files by CHRs (ABCD actually comes separated but QC combined them) and store to "bfile_by_chr/"
+        for (chr in 1:22) {
+          output_path <- paste0('"', work_dir, "bfile_by_chr/scfc_all", qc, unrel, "_chr", chr, '"')
+          command <- paste(plink_path, "--bfile", bfile, "--chr", chr, "--make-bed --out", output_path)
+          system(command, intern=TRUE)
+        }
+
+        for(dsm5 in dsm5s) {
+          #==============================read GWAS results==============================
+          # Either a fastGWA file, a PLINK2.0, or a PLINK1.9 file
+          gwas_path <- paste0(gwas_dir, method, qc, unrel, "_dsm5_", dsm5, ".csv")
+          if (!file.exists(gwas_path)) {
+            cat("No GWAS results available for dsm5:", dsm5, "skipping current dsm5...")
+            next
+          }
+          # # alternative way might be useful in the future: not read csv, just read original gwas output
+          # fastGWA_path <- paste0(gwas_dir, "fastGWA_dsm5", dsm5, ".fastGWA")
+          # gwas20_path <- paste0(gwas_dir, "gwas_scfc_unrelated_sd_harm2_family_dsm5", dsm5, ".PHENO1.glm.linear")
+          # gwas19_path <- paste0(gwas_dir, "gwasplink19_dsm5", dsm5, ".qassoc")
+          #-----------------------------------------------------------------------------
+          if (startsWith(method, "dsm5_fastGWA")) {
+            cat("\n\ndsm5",dsm5,":fastGWA")
+            gwas_dsm5 <- read.csv(gwas_path, header = TRUE) %>%
+              rename(A1_fastgwa = A1, A2_fastgwa = A2, AF1_fastgwa = AF1) %>%
+              mutate(REF_plink = NA, ALT_plink = NA, PROVISIONAL_REF_plink = NA, A1_plink = NA, OMITTED_plink = NA, AF1_plink = NA) %>% # Add empty columns for PLINK-specific fields
+              select(CHR, SNP, POS, REF_plink, ALT_plink, PROVISIONAL_REF_plink, A1_plink, OMITTED_plink, AF1_plink, A1_fastgwa, A2_fastgwa, AF1_fastgwa, N, BETA, SE, P) # only keep necessary columns (both plink and fastgwa columns are kept)
+            
+          } else if (startsWith(method, "dsm5_gwasplink20")) {
+            cat("\n\ndsm5",dsm5,":GWAS plink2.0")
+            gwas_dsm5 <- read.csv(gwas_path, header = TRUE) %>% # The chrome column name keeps changing names i don't know why
+              rename(CHR = `X.CHROM`, REF_plink = REF, ALT_plink = ALT, PROVISIONAL_REF_plink = `PROVISIONAL_REF.`, A1_plink = A1, OMITTED_plink = OMITTED, AF1_plink = A1_FREQ, N = OBS_CT) %>%
+              mutate(A1_fastgwa = NA, A2_fastgwa = NA, AF1_fastgwa = NA) %>% # Add empty columns for FastGWA-specific fields
+              select(CHR, SNP, POS, REF_plink, ALT_plink, PROVISIONAL_REF_plink, A1_plink, OMITTED_plink, AF1_plink, A1_fastgwa, A2_fastgwa, AF1_fastgwa, N, BETA, SE, P) # only keep necessary columns (both plink and fastgwa columns are kept)
+            
+          } else if (startsWith(method, "dsm5_gwasplink19")) {
+            cat("\n\ndsm5",dsm5,":GWAS plink1.9")
+            gwas_dsm5 <- read.csv(gwas_path, header = TRUE) %>%
+              rename(POS = BP, N = NMISS) %>%
+              select(CHR, SNP, POS, N, BETA, SE, P)
+            
+          } else {
+            cat("\nDid you type in the wrong method name? Current GWAS method does not have result files available for dsm5", dsm5, "\n")
+            next  # Skip to the next iteration if no files are found
+          }
+          #-----------------------------------------------------------------------------
+          #### IV Selection (using exposure: scfc)######################################
+          ### Run T+C (Thresholding first and Clumping next)============================
+          for (pvalthr in pvalthrs) {
+            # -----for inspection purpose, output thresholding results to local---------
+            gwas_dsm5.thresh <- gwas_dsm5[gwas_dsm5$P <= pvalthr,]
+            thresh_count_path <- paste0(thresh_path, "threshold_count/", method, qc, unrel, "_", pvalthr, "/")
+            if (!dir.exists(thresh_count_path)) { dir.create(thresh_count_path, recursive = TRUE) }
+            write.table(gwas_dsm5.thresh, paste0(thresh_count_path, "gwas_thresh_dsm5",dsm5,".txt"), row.names = F, col.names = T, quote = F)
+            readme_path <- paste0(thresh_count_path, "readme.txt")
+            readme_conn <- file(readme_path, "a")
+            writeLines(paste0("dsm5", dsm5, " after thresholding: ", nrow(gwas_dsm5.thresh)), readme_conn)
+            close(readme_conn)
+            
+            ## ---------------------2nd level Directories-------------------------------
+            ## 2.1 Thresholding
+            thresh_idlist_path <- paste0(thresh_path, "thr_idlists/")                   # 2.1.1 for storing SNP id lists for plink to subset bfiles
+            if (!dir.exists(thresh_idlist_path)) { dir.create(thresh_idlist_path, recursive = F) }
+            thresh_bfile_by_chr_path <- paste0(thresh_path, "thr_bfile_by_chr/")        # 2.1.2 for storing bfile by chr AFTER thresholding (for clumping)
+            if (!dir.exists(thresh_bfile_by_chr_path)) { dir.create(thresh_bfile_by_chr_path, recursive = F) }
+            thresh_gwas_path <- paste0(thresh_path, "thr_gwas/")                           # 2.1.3 for storing GWAS results filtered AFTER thresholding (for clumping) 
+            if (!dir.exists(thresh_gwas_path)) { dir.create(thresh_gwas_path, recursive = F) }
+            
+            ## 2.2 Clumping
+            clump_clumped_path <- paste0(clumping_path, "clumped/")                     # 2.2.1 for storing raw clumped results, by chr
+            if (!dir.exists(clump_clumped_path)) { dir.create(clump_clumped_path, recursive = F) }
+            
+            ## 2.3 C+T does not need additional sub-directories
+            
+            ## --------------------3rd level Directories (pvalthr)----------------------
+            # create directories for thresholding p-values (pvalthr)
+            # 2.1.1 thresholding directories
+            thresh_idlist_pvalthr_path <- paste0(thresh_idlist_path, "idlist_p=", pvalthr, "/")                    # 2.1.1.1 for storing SNP id lists for current pvalthr
+            if (!dir.exists(thresh_idlist_pvalthr_path)) { dir.create(thresh_idlist_pvalthr_path, recursive = F) }
+            thresh_bfile_by_chr_pvalthr_path <- paste0(thresh_bfile_by_chr_path, "bfile_by_chr_p=", pvalthr, "/")  # 2.1.2.1 for storing bfiles for current pvalthr
+            if (!dir.exists(thresh_bfile_by_chr_pvalthr_path)) { dir.create(thresh_bfile_by_chr_pvalthr_path, recursive = F) }
+            thresh_gwas_pvalthr_path <- paste0(thresh_gwas_path, "gwas_p=", pvalthr, "/")                          # 2.1.3.1 for storing GWAS results for current pvalthr
+            if (!dir.exists(thresh_gwas_pvalthr_path)) { dir.create(thresh_gwas_pvalthr_path, recursive = F) }
+            
+            # 2.2.1 clumping directories
+            clump_clumped_pvalthr_path <- paste0(clump_clumped_path, "clumped_p=", pvalthr, "/")                 # 2.2.1.1 for storing raw clumped results for current pvalthr
+            if (!dir.exists(clump_clumped_pvalthr_path)) { dir.create(clump_clumped_pvalthr_path, recursive = F) }
+            
+            # 2.3.1 C+T directories
+            ct_pvalthr_path <- paste0(ct_path, "p=", pvalthr, "/")                                                 # 2.3.1.1 for storing C+T results for current pvalthr 
+            if (!dir.exists(ct_pvalthr_path)) { dir.create(ct_pvalthr_path, recursive = F) }
+            ct_final_path <- paste0(ct_pvalthr_path, 'dsm5', dsm5, '.', "_p=", pvalthr, "_r2=", r2, ".txt")          # 2.3.1.2 txt file for storing final C+T SNPs, used if clumping is successful
+        
+            #---------------------------------------------------------------------------
+            for (chr in 1:22){
+        
+              sum.chrspecific = gwas_dsm5[gwas_dsm5$CHR == chr,]
+              # --------------------- Step 2.2: Run C+T --------------------------------
+              set.seed(2023)
+              
+              ## --------------------- Thresholding (T) --------------------------------
+              # filter SNPs by p-value
+              sum.data <- sum.chrspecific
+              sum.data <- sum.data[sum.data$P <= pvalthr,]
+              # writes list of filtered SNP id
+              snp_id_list <- paste0(thresh_idlist_pvalthr_path, "idlist_dsm5",dsm5,'_chr',chr,'_pvalthr',pvalthr,".txt") #这个filtered指的是thresholding
+              write.table(sum.data[,'SNP'], snp_id_list, quote = F, col.names = F, row.names = F)
+              
+              # write filtered SNPs bfile back to SNP list using PLINK1.9
+              system(paste0(plink_path, " --bfile ", work_dir, "bfile_by_chr/scfc_all", qc, unrel, "_chr", chr,
+                            " --extract ", snp_id_list,
+                            " --make-bed --out ", thresh_bfile_by_chr_pvalthr_path, "scfc_all", qc, unrel, "_thr","_dsm5",dsm5,'_chr',chr,'_pvalthr',pvalthr), # filtered snps by chr
+                     intern = T)
+              
+              # write the threshold GWAS summary with SNP and P-value to local (to be used by clumping)
+              sumstats_input <- sum.data[,c('SNP','P')]
+              fwrite(sumstats_input, file=paste0(thresh_gwas_pvalthr_path,'gwas_dsm5',dsm5,'_chr',chr,'_pvalthr',pvalthr,'.txt'),row.names = F, quote = F, sep=' ')
+              
+              cat('\nTHRESHOLDING FINISHED dsm5:',dsm5,' chr:',chr," pvalthr:",pvalthr)
+              
+              ## --------------------- LD Clumping (C) ---------------------
+              # outputfilename
+              clumpedfilename <- paste0("dsm5",dsm5,'_chr',chr,"_clumped") # C+T files naming: removed "adhd" in the name, removed "ite", put "dsm5" before "chr"
+              # run clumping on plink
+              ldclumpcode <- paste0(plink_path, 
+                                    ' --bfile ',thresh_bfile_by_chr_pvalthr_path,"scfc_all",qc,unrel,"_thr","_dsm5",dsm5,'_chr',chr,'_pvalthr',pvalthr,
+                                    ' --clump ',thresh_gwas_pvalthr_path,'gwas_dsm5',dsm5,'_chr',chr,'_pvalthr',pvalthr,'.txt',
+                                    ' --clump-p1 ',p.ldclump,
+                                    ' --clump-r2 ',r2,
+                                    ' --clump-kb ',kb,
+                                    ' --threads 1',
+                                    # ' --silent',
+                                    ' --out ',clump_clumped_pvalthr_path,clumpedfilename)
+              system(ldclumpcode, intern = T)
+              cat('\nCLUMPING FINISHED dsm5:',dsm5,' chr:',chr," pvalthr:",pvalthr)
+              
+              ##===================== read clumped files================================
+              # First confirm that there is valid clumped results
+              if (!file.exists(paste0(clump_clumped_pvalthr_path,clumpedfilename,'.clumped'))) {
+                cat('\nNO CLUMPING RESULTS AVAILABLE for dsm5:',dsm5,' chr:',chr," pvalthr:",pvalthr)
+                next
+              }
+              LD <- bigreadr::fread2(paste0(clump_clumped_pvalthr_path,clumpedfilename,'.clumped'))
+              clump.snp <- LD[,3,drop=F]
+              prs.all <- left_join(clump.snp,sum.data,by="SNP")
+              
+              prs.file = prs.all[prs.all$P <= pvalthr,] # USELESS?
+              # -------------------------- Append the SNPs by chr ----------------------
+              if (file.exists(ct_final_path)) {
+                write.table(prs.file, file = ct_final_path, append = TRUE, col.names = FALSE, row.names = F, quote = F)
+              } else {
+                write.table(prs.file, file = ct_final_path, append = FALSE, col.names = TRUE, row.names = F, quote = F)
+              }
+              cat('\nC+T DONE for dsm5:',dsm5,' chr:',chr," pvalthr:", pvalthr)
+            }
+            # ------for inspection purpose, output C+T counts results to local----------
+            readme_path <- paste0(ct_pvalthr_path, "readme.txt")
+            readme_conn <- file(readme_path, "a")
+            if (file.exists(ct_final_path)) {
+              ct.count <- read.table(ct_final_path, header = T)
+              writeLines(paste0("dsm5", dsm5, " after C+T: ", nrow(ct.count)), readme_conn)
+            } else {
+              writeLines(paste0("dsm5", dsm5, " after C+T: ", "No SNPs pass C+T"), readme_conn)
+            }
+            close(readme_conn)
+          }
+        ####
+        }
+      }
+    
+  }
+}
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
